@@ -219,3 +219,30 @@ test('builds.list refuses pipeline refs that are not plain slugs', async () => {
   const { answer, requests } = await list({}, { pipelines: [{ org: '../x', slug: 'web' }] })
   assert.deepEqual([answer.ok, requests.length], [false, 0])
 })
+
+test('builds.list refuses a pipeline ref with a missing slug without calling Buildkite', async () => {
+  const { answer, requests } = await list({}, { pipelines: [{ org: 'acme' } as never] })
+  assert.deepEqual([!answer.ok && answer.error.message, requests.length], ["That pipeline isn't valid", 0])
+})
+
+test('builds.list refuses a pipeline ref with a null org without calling Buildkite', async () => {
+  const { answer, requests } = await list({}, { pipelines: [{ org: null, slug: 'web' } as never] })
+  assert.deepEqual([!answer.ok && answer.error.message, requests.length], ["That pipeline isn't valid", 0])
+})
+
+test('builds.list asks Buildkite once and returns each build once when a pipeline is repeated', async () => {
+  const { answer, requests } = await list(
+    { [path()]: { status: 200, json: [bk(2, 'passed', '2026-01-02T00:00:00Z')] } },
+    { pipelines: [P, { ...P }] }
+  )
+  assert.deepEqual([numbers(answer), requests.length], [[2], 2])
+})
+
+test('builds.list answers token_invalid when another pipeline is unreachable', async () => {
+  const other = { org: 'acme', slug: 'api' }
+  const { answer } = await list(
+    { [path()]: 'network-error', [path(other)]: { status: 401 } },
+    { pipelines: [P, other] }
+  )
+  assert.equal(!answer.ok && answer.error.kind, 'token_invalid')
+})

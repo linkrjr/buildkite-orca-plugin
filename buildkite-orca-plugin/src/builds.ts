@@ -84,16 +84,21 @@ export function createBuilds(auth: Auth, hasFields: HasFields = blockStepHasFiel
   }
 
   function pickError(errors: BkError[]): BkError {
+    // A rejected token matters most: it sends the panel back to sign-in.
+    const rejected = errors.find((e) => e.kind === 'token_invalid')
+    if (rejected) return rejected
     const limited = errors.filter((e) => e.kind === 'rate_limited')
     if (limited.length === 0) return errors[0]
     return limited.reduce((a, b) => ((b.retryAfterSec ?? 0) > (a.retryAfterSec ?? 0) ? b : a))
   }
 
   async function list(input: ListInput): Promise<Result<Listed>> {
-    const refs = Array.isArray(input?.pipelines) ? input.pipelines : []
-    if (!refs.every((r) => SLUG.test(String(r?.org)) && SLUG.test(String(r?.slug)))) {
+    const given = Array.isArray(input?.pipelines) ? input.pipelines : []
+    const isSlug = (v: unknown) => typeof v === 'string' && SLUG.test(v)
+    if (!given.every((r) => isSlug(r?.org) && isSlug(r?.slug))) {
       return { ok: false, error: { kind: 'not_found', message: "That pipeline isn't valid" } }
     }
+    const refs = [...new Map(given.map((r) => [`${r.org}/${r.slug}`, r])).values()]
     const branch = typeof input.branch === 'string' && input.branch ? input.branch : undefined
     const results = await Promise.all(refs.map((r) => forPipeline(r, branch)))
     const errors = results.flatMap((r) => (r.ok ? [] : [r.error]))
