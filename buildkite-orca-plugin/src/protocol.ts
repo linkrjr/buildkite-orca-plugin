@@ -29,6 +29,29 @@ export type Pipeline = PipelineRef & { orgName: string; name: string; repository
 export type Workspace = { id: string; path: string; remote: string | null; branch: string | null }
 /** `none` = no match and no manual choice. */
 export type Project = { workspace: Workspace | null; source: 'auto' | 'manual' | 'none'; pipelines: Pipeline[] }
+export type Job = {
+  id: string
+  type: 'script' | 'manual' | 'waiter' | 'trigger'
+  name: string
+  state: string
+  unblockable: boolean
+  hasFields: boolean
+}
+export type Build = {
+  org: string
+  pipelineSlug: string
+  pipelineName: string
+  number: number
+  state: string
+  branch: string
+  message: string
+  author: string
+  createdAt: string
+  startedAt: string | null
+  finishedAt: string | null
+  webUrl: string
+  jobs: Job[]
+}
 
 declare module 'orca' {
   interface PluginRequests {
@@ -50,6 +73,11 @@ declare module 'orca' {
     'pipelines.visible': { input: { query?: string }; output: Result<Pipeline[]> }
     /** Remembers a workspace's pipelines; `null` goes back to automatic matching. */
     'project.choose': { input: { workspaceId: string; pipelines: PipelineRef[] | null }; output: Result<Project> }
+    /** Up to 20 builds of the given pipelines: active first, then finished, each newest first. */
+    'builds.list': {
+      input: { pipelines: PipelineRef[]; branch?: string }
+      output: Result<{ builds: Build[]; fetchedAt: string }>
+    }
   }
   interface PluginPanelEvents {
     /** Posted when the sign-in state changes. */
