@@ -34,8 +34,8 @@ export function createAuth(orca: OrcaWorkerApi) {
     }
   }
 
-  async function signIn(raw: string): Promise<Result<AuthState>> {
-    const token = raw.trim()
+  async function signIn(raw: unknown): Promise<Result<AuthState>> {
+    const token = typeof raw === 'string' ? raw.trim() : ''
     // A header-unsafe token (newline, non-Latin-1) would make fetch throw before any request.
     if (!token || !/^[\x21-\x7e]+$/.test(token)) {
       return { ok: false, error: { kind: 'token_invalid', message: 'Buildkite rejected this token' } }

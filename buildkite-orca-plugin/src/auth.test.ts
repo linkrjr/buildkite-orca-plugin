@@ -151,3 +151,19 @@ test('auth.signIn restores the old token when saving the profile fails during re
   fake.restore()
   await worker.deactivate()
 })
+
+test('auth.signIn answers token_invalid for a missing token without calling Buildkite', async () => {
+  const { worker, fake, done } = await setup()
+  const answer = await (worker.request as (m: string, p: unknown) => Promise<{ ok: boolean; error?: { kind: string } }>)('auth.signIn', {})
+  assert.equal(answer.error?.kind, 'token_invalid')
+  assert.deepEqual(fake.requests, [])
+  await done()
+})
+
+test('auth.signIn answers token_invalid for a non-string token without calling Buildkite', async () => {
+  const { worker, fake, done } = await setup()
+  const answer = await (worker.request as (m: string, p: unknown) => Promise<{ ok: boolean; error?: { kind: string } }>)('auth.signIn', { token: 123 })
+  assert.equal(answer.error?.kind, 'token_invalid')
+  assert.deepEqual(fake.requests, [])
+  await done()
+})

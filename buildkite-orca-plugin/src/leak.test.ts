@@ -52,6 +52,11 @@ test('token never leaks when the second validation call fails', () =>
     await call(() => w.request('auth.signIn', { token: FAKE_TOKEN }))
   }))
 
+test('token never leaks when sign-in gets a non-string token', () =>
+  run(validRoutes(), async (call, w) => {
+    await call(() => (w.request as (m: string, p: unknown) => Promise<unknown>)('auth.signIn', { token: 123 }))
+  }))
+
 // The harness itself must catch a leak, or the tests above prove nothing.
 test('harness fails when the token reaches a log line', async () => {
   const host = mockHost()
