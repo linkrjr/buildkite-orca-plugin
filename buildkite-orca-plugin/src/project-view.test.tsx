@@ -72,7 +72,24 @@ test('no remote and nothing visible', async () => {
   })
   assert.ok(has(view, 'This workspace has no git remote'))
   assert.ok(has(view, "Your token can't see any pipelines."))
+  assert.ok(has(view, 'Replace the token'))
   assert.ok(!view.find({ label: 'Search pipelines' }))
+  await view.unmount()
+})
+
+test('loading visible pipelines fails: error with Retry that loads again', async () => {
+  let fail = true
+  const view = await mount(panel, {
+    host: host(() => proj({ source: 'none', pipelines: [] }), {
+      'pipelines.visible': () =>
+        fail ? { ok: false, error: { kind: 'network', message: "Can't reach Buildkite" } } : { ok: true, value: [web] }
+    })
+  })
+  assert.ok(has(view, "Can't reach Buildkite"))
+  fail = false
+  await view.press({ text: 'Retry' })
+  assert.ok(!has(view, "Can't reach Buildkite"))
+  assert.ok(view.find({ label: 'web' }))
   await view.unmount()
 })
 
@@ -147,6 +164,23 @@ test('pipeline filter only with several pipelines, remembered per workspace (AC1
   // A stored pipeline that no longer matches falls back to all.
   await view.post('project.changed', proj({ pipelines: [web, ops] }))
   assert.equal(view.valueOf({ label: 'Pipeline' }), 'all')
+  await view.unmount()
+})
+
+test('changing the filter keeps the workspace\'s other stored preferences', async () => {
+  const h = mockHost({
+    storage: { 'panel.prefs': { 'ws-1': { pipeline: 'acme/web', branchOnly: true }, 'ws-2': { pipeline: 'acme/api' } } },
+    requests: {
+      'auth.status': () => signedIn,
+      'project.get': () => ({ ok: true, value: proj({ pipelines: [web, api] }) }),
+      'pipelines.visible': () => ({ ok: true, value: [web, api] })
+    } as never
+  })
+  const view = await mount(panel, { host: h })
+  await view.select({ label: 'Pipeline' }, 'acme/api')
+  assert.deepEqual(view.persisted.storage, {
+    'panel.prefs': { 'ws-1': { pipeline: 'acme/api', branchOnly: true }, 'ws-2': { pipeline: 'acme/api' } }
+  })
   await view.unmount()
 })
 

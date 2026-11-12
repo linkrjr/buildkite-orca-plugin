@@ -28,7 +28,7 @@ const ALL = 'all'
 export const project = atom<Project | null>(null)
 const loadError = atom<BkError | null>(null)
 // Pipeline filter per workspace id, in plugin storage. Never written for an unresolvable id ('').
-const prefs = atom<Record<string, { pipeline?: string }>>('panel.prefs', {}, { persist: 'storage' })
+const prefs = atom<Record<string, { pipeline?: string; [other: string]: unknown }>>('panel.prefs', {}, { persist: 'storage' })
 const unsavedFilter = atom(ALL)
 
 const picking = atom(false)
@@ -50,7 +50,7 @@ function currentFilter(p: Project | null): string {
 function setFilter(value: string): void {
   const id = workspaceId(read(project))
   if (!id) return set(unsavedFilter, value)
-  set(prefs, { ...read(prefs), [id]: { pipeline: value } })
+  set(prefs, { ...read(prefs), [id]: { ...read(prefs)[id], pipeline: value } })
 }
 
 /** The pipelines whose builds the panel shows: the project's, narrowed by the pipeline filter. */
@@ -103,6 +103,7 @@ export async function loadProject(): Promise<void> {
 async function loadVisible(): Promise<void> {
   const id = workspaceId(read(project))
   set(visible, null)
+  set(saveError, null)
   try {
     const answer = await plugin.request('pipelines.visible', {})
     if (workspaceId(read(project)) !== id) return
@@ -145,14 +146,19 @@ function matches(p: Pipeline, q: string): boolean {
   return !needle || [p.name, p.slug, p.org, p.orgName].some((s) => s.toLowerCase().includes(needle))
 }
 
-function Picker({ project: p, cancellable }: { project: Project; cancellable: boolean }) {
+function Picker({ cancellable }: { cancellable: boolean }) {
   const all = read(visible)
   const err = read(saveError)
   const sel = read(picked)
   const q = read(query)
   if (all === null) {
     return err ? (
-      <Callout tone="danger" title={err.message} />
+      <Stack gap="sm">
+        <Callout tone="danger" title={err.message} />
+        <Button icon="refresh" tone="danger" onPress={() => void loadVisible()}>
+          Retry
+        </Button>
+      </Stack>
     ) : (
       <Stack gap="sm">
         <Spinner label="Loading pipelines" />
@@ -161,7 +167,14 @@ function Picker({ project: p, cancellable }: { project: Project; cancellable: bo
     )
   }
   if (all.length === 0) {
-    return <EmptyState icon="info" title="Your token can't see any pipelines." />
+    return (
+      <Stack gap="sm">
+        <EmptyState icon="info" title="Your token can't see any pipelines." />
+        <Text muted size="xs">
+          Replace the token with one that can read your Buildkite pipelines.
+        </Text>
+      </Stack>
+    )
   }
   const shown = all.filter((x) => matches(x, q))
   const orgs = [...new Set(shown.map((x) => x.org))]
@@ -296,7 +309,7 @@ export function ProjectArea() {
     return (
       <Stack gap="sm">
         <Text muted size="xs">{`Pipelines for this workspace · ${p.source === 'manual' ? 'chosen manually' : 'automatic match'}`}</Text>
-        <Picker project={p} cancellable />
+        <Picker cancellable />
       </Stack>
     )
   }
@@ -318,7 +331,7 @@ export function ProjectArea() {
             can't be saved.
           </Text>
         ) : (
-          <Picker project={p} cancellable={false} />
+          <Picker cancellable={false} />
         )}
       </Stack>
     )
