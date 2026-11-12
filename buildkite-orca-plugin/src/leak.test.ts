@@ -117,3 +117,61 @@ test('token never leaks on a network error with a stored token', () =>
 
 test('token never leaks on a successful request with a stored token', () =>
   runAuthed({ 'GET /v2/organizations': { status: 200, json: [] } }, { token: FAKE_TOKEN }))
+
+// T4 actions with a stored token: success and every error path.
+const AB = '/v2/organizations/acme/pipelines/web/builds/7'
+const target = { org: 'acme', pipeline: 'web', number: 7 }
+const runActions = (routes: Parameters<typeof installFakeBuildkite>[0], canWriteBuilds = true) => {
+  const fake = installFakeBuildkite(routes)
+  const host = mockHost({ secrets: { token: FAKE_TOKEN }, storage: { 'auth.profile': { user: { name: 'Ada' }, canWriteBuilds } } })
+  return mountWorker(main, { host }).then(async (worker) => {
+    const harness = createLeakHarness(FAKE_TOKEN, worker, host)
+    const req = worker.request as (m: string, p: unknown) => Promise<unknown>
+    try {
+      await harness.call(() => req('builds.rebuild', target))
+      await harness.call(() => req('builds.cancel', target))
+      await harness.call(() => req('jobs.unblock', { ...target, jobId: 'j-1' }))
+      await harness.call(() => req('builds.rebuild', { ...target, org: '../x' }))
+    } finally {
+      harness.assertClean()
+      fake.restore()
+      await worker.deactivate()
+    }
+  })
+}
+const blocked = { status: 200, json: { jobs: [{ id: 'j-1', graphql_id: 'Sm9iLS0tMQ==', type: 'manual', label: 'Deploy', state: 'blocked', unblockable: true }] } }
+
+test('token never leaks when rebuild, cancel and unblock succeed', () =>
+  runActions({
+    [`PUT ${AB}/rebuild`]: { status: 201, json: { number: 8 } },
+    [`PUT ${AB}/cancel`]: { status: 200 },
+    [`GET ${AB}`]: blocked,
+    [`PUT ${AB}/jobs/j-1/unblock`]: { status: 200 }
+  }))
+
+test('token never leaks when Buildkite refuses the actions', () =>
+  runActions({
+    [`PUT ${AB}/rebuild`]: { status: 403, json: { message: FAKE_TOKEN } },
+    [`PUT ${AB}/cancel`]: { status: 403 },
+    [`GET ${AB}`]: blocked,
+    [`PUT ${AB}/jobs/j-1/unblock`]: { status: 403 }
+  }))
+
+test('token never leaks when the actions hit network errors', () =>
+  runActions({
+    [`PUT ${AB}/rebuild`]: 'network-error',
+    [`PUT ${AB}/cancel`]: 'network-error',
+    [`GET ${AB}`]: 'network-error'
+  }))
+
+test('token never leaks when the actions are rate limited or fail', () =>
+  runActions({
+    [`PUT ${AB}/rebuild`]: { status: 429, headers: { 'RateLimit-Reset': '3' } },
+    [`PUT ${AB}/cancel`]: { status: 500 },
+    [`GET ${AB}`]: { status: 404 }
+  }))
+
+test('token never leaks when the actions are refused for a token without write_builds', () => runActions({}, false))
+
+test('token never leaks when the actions are rejected as 401', () =>
+  runActions({ [`PUT ${AB}/rebuild`]: { status: 401, json: { message: FAKE_TOKEN } } }))

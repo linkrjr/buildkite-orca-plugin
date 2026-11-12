@@ -22,6 +22,8 @@ export type AuthState =
   | { state: 'signedOut'; reason?: 'token_rejected' }
   | { state: 'signedIn'; user: { name: string; email?: string }; canWriteBuilds: boolean }
 
+export type BuildTarget = { org: string; pipeline: string; number: number }
+
 declare module 'orca' {
   interface PluginRequests {
     /** The total the worker keeps in storage. */
@@ -34,6 +36,12 @@ declare module 'orca' {
     'auth.signIn': { input: { token: string }; output: Result<AuthState> }
     /** Deletes the stored token. */
     'auth.signOut': { output: AuthState }
+    /** Rebuilds a build; answers the new build's number. */
+    'builds.rebuild': { input: BuildTarget; output: Result<{ number: number }> }
+    /** Cancels a build. */
+    'builds.cancel': { input: BuildTarget; output: Result<{}> }
+    /** Unblocks a block step that has no input fields. */
+    'jobs.unblock': { input: BuildTarget & { jobId: string }; output: Result<{}> }
   }
   interface PluginPanelEvents {
     /** Posted to every open panel after the total changes. */
