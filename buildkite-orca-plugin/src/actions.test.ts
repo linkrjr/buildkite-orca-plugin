@@ -1,15 +1,32 @@
 // T4: rebuild, cancel and unblock (AC19-AC22, worker side).
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import * as main from './worker'
+import { createAuth } from './auth'
+import { registerActions } from './actions'
 import { FAKE_TOKEN, installFakeBuildkite, validRoutes, type FakeRoutes } from './testing/fake-buildkite'
 
 const B = '/v2/organizations/acme/pipelines/web/builds/7'
 const PROFILE = { user: { name: 'Ada' }, canWriteBuilds: true }
 
-async function setup(routes: FakeRoutes, canWriteBuilds = true) {
+// Buildkite's real REST shape for a blocked manual job (no `fields`, label instead of name).
+const blockedJob = {
+  id: 'j-1',
+  graphql_id: 'Sm9iLS0tMQ==',
+  type: 'manual',
+  label: 'Deploy',
+  state: 'blocked',
+  web_url: 'https://buildkite.com/acme/web/builds/7#j-1',
+  unblockable: true,
+  unblock_url: 'https://api.buildkite.com/v2/organizations/acme/pipelines/web/builds/7/jobs/j-1/unblock'
+}
+
+async function setup(routes: FakeRoutes, canWriteBuilds = true, hasFields?: () => Promise<boolean>) {
   const fake = installFakeBuildkite({ ...validRoutes(), ...routes })
   const host = mockHost({ secrets: { token: FAKE_TOKEN }, storage: { 'auth.profile': { ...PROFILE, canWriteBuilds } } })
-  const worker = await mountWorker(main, { host })
+  const worker = await mountWorker(
+    hasFields ? { default: (orca) => registerActions(orca, createAuth(orca), hasFields) } : main,
+    { host }
+  )
   const req = worker.request as (m: string, p: unknown) => Promise<any>
   return { fake, worker, req, done: async () => { fake.restore(); await worker.deactivate() } }
 }
@@ -28,22 +45,46 @@ test('cancel PUTs the build cancel endpoint and answers an empty value', async (
   await s.done()
 })
 
-test('unblock PUTs the job unblock endpoint when the block step has no fields', async () => {
+test('unblock PUTs the job unblock endpoint when the lookup confirms the block step has no fields', async () => {
   const s = await setup({
-    [`GET ${B}`]: { status: 200, json: { jobs: [{ id: 'j-1', type: 'manual', state: 'blocked' }] } },
+    [`GET ${B}`]: { status: 200, json: { jobs: [blockedJob] } },
     [`PUT ${B}/jobs/j-1/unblock`]: { status: 200, json: {} }
-  })
+  }, true, async () => false)
   assert.deepEqual(await s.req('jobs.unblock', { ...target, jobId: 'j-1' }), { ok: true, value: {} })
   await s.done()
 })
 
-test('unblock refuses a block step with input fields and does not call unblock', async () => {
+test('unblock refuses and does not call unblock when the lookup says the step has fields', async () => {
   const s = await setup({
-    [`GET ${B}`]: { status: 200, json: { jobs: [{ id: 'j-1', type: 'manual', state: 'blocked', fields: [{ key: 'a' }] }] } }
-  })
+    [`GET ${B}`]: { status: 200, json: { jobs: [blockedJob] } }
+  }, true, async () => true)
   const answer = await s.req('jobs.unblock', { ...target, jobId: 'j-1' })
   assert.equal(answer.ok, false)
   assert.equal(s.fake.requests.some((r) => r.method === 'PUT'), false)
+  await s.done()
+})
+
+test('unblock refuses by default because the real lookup cannot confirm the step has no fields', async () => {
+  const s = await setup({ [`GET ${B}`]: { status: 200, json: { jobs: [blockedJob] } } })
+  const answer = await s.req('jobs.unblock', { ...target, jobId: 'j-1' })
+  assert.equal(answer.ok, false)
+  assert.equal(answer.error.kind, 'buildkite_error')
+  assert.equal(s.fake.requests.some((r) => r.method === 'PUT'), false)
+  await s.done()
+})
+
+test('rebuild answers buildkite_error when Buildkite omits the new build number', async () => {
+  const s = await setup({ [`PUT ${B}/rebuild`]: { status: 201, json: {} } })
+  const answer = await s.req('builds.rebuild', target)
+  assert.equal(answer.ok, false)
+  assert.equal(answer.error.kind, 'buildkite_error')
+  await s.done()
+})
+
+test('invalid input is answered with a message that does not claim Buildkite was asked', async () => {
+  const s = await setup({})
+  const answer = await s.req('builds.cancel', null)
+  assert.equal(answer.error.message, "That build or job isn't valid")
   await s.done()
 })
 
@@ -72,9 +113,9 @@ test('a refused action is not retried', async () => {
 
 test('unblock answers forbidden naming the pipeline when Buildkite refuses', async () => {
   const s = await setup({
-    [`GET ${B}`]: { status: 200, json: { jobs: [{ id: 'j-1', type: 'manual', state: 'blocked' }] } },
+    [`GET ${B}`]: { status: 200, json: { jobs: [blockedJob] } },
     [`PUT ${B}/jobs/j-1/unblock`]: { status: 403 }
-  })
+  }, true, async () => false)
   const answer = await s.req('jobs.unblock', { ...target, jobId: 'j-1' })
   assert.equal(answer.error.message, "You don't have permission to do this on web")
   await s.done()

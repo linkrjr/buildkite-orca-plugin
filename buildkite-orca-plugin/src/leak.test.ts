@@ -139,7 +139,7 @@ const runActions = (routes: Parameters<typeof installFakeBuildkite>[0], canWrite
     }
   })
 }
-const blocked = { status: 200, json: { jobs: [{ id: 'j-1', type: 'manual', state: 'blocked' }] } }
+const blocked = { status: 200, json: { jobs: [{ id: 'j-1', graphql_id: 'Sm9iLS0tMQ==', type: 'manual', label: 'Deploy', state: 'blocked', unblockable: true }] } }
 
 test('token never leaks when rebuild, cancel and unblock succeed', () =>
   runActions({
