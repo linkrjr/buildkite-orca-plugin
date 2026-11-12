@@ -21,6 +21,7 @@ import {
   type PanelContext
 } from 'orca'
 import type { AuthState, BkError } from './protocol'
+import { applyProject, loadProject, ProjectArea, resetProject } from './project-view'
 
 // None of these is persisted. The token only ever lives in the field's draft until submit.
 const auth = atom<AuthState | null>(null)
@@ -34,7 +35,10 @@ function applyAuth(next: AuthState): void {
   set(auth, next)
   set(formError, null)
   set(menuOpen, false)
-  if (next.state === 'signedOut') set(replacing, false)
+  if (next.state === 'signedOut') {
+    set(replacing, false)
+    resetProject()
+  } else void loadProject()
 }
 
 /** Sends the draft to the worker and clears it right away; the answer never carries the token. */
@@ -66,6 +70,11 @@ async function signOut(): Promise<void> {
 
 export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(plugin.on('auth.changed', applyAuth))
+  ctx.subscriptions.push(
+    plugin.on('project.changed', (next) => {
+      if (read(auth)?.state === 'signedIn') applyProject(next)
+    })
+  )
   void plugin.request('auth.status').then(applyAuth)
 }
 
@@ -198,7 +207,7 @@ function SignedIn({ name }: { name: string }) {
           </List>
         </Card>
       ) : null}
-      {read(replacing) ? <ReplaceToken /> : <Text muted>Your builds will appear here.</Text>}
+      {read(replacing) ? <ReplaceToken /> : <ProjectArea />}
     </Stack>
   )
 }
