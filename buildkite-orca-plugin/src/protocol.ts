@@ -26,10 +26,6 @@ export type BuildTarget = { org: string; pipeline: string; number: number }
 
 declare module 'orca' {
   interface PluginRequests {
-    /** The total the worker keeps in storage. */
-    'counter.get': { output: { total: number } }
-    /** Adds `by` to the stored total and answers the new total. */
-    'counter.add': { input: { by: number }; output: { total: number } }
     /** The current sign-in state. */
     'auth.status': { output: AuthState }
     /** Validates the token with Buildkite, then stores it. Also used to replace a token. */
@@ -44,8 +40,6 @@ declare module 'orca' {
     'jobs.unblock': { input: BuildTarget & { jobId: string }; output: Result<{}> }
   }
   interface PluginPanelEvents {
-    /** Posted to every open panel after the total changes. */
-    'counter.changed': { total: number }
     /** Posted when the sign-in state changes. */
     'auth.changed': AuthState
   }
