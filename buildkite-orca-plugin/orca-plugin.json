@@ -3,9 +3,9 @@
   "id": "buildkite-orca-plugin",
   "name": "Buildkite",
   "version": "0.1.0",
-  "description": "A sidebar panel and the worker that answers it.",
+  "description": "Buildkite builds for the active workspace, in a sidebar panel.",
   "engines": {
-    "orca": ">=1.4.246"
+    "orca": ">=1.4.248"
   },
   "execution": "trusted-worker",
   "pluginApi": 1,
