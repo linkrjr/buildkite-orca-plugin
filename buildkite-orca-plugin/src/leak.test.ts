@@ -62,6 +62,46 @@ test('token never leaks when sign-in gets a null payload', () =>
     await call(() => (w.request as (m: string, p: unknown) => Promise<unknown>)('auth.signIn', null))
   }))
 
+// T2: project and pipeline flows, with a stored token.
+const projectHost = () => mockHost({
+  secrets: { token: FAKE_TOKEN },
+  storage: { 'auth.profile': { user: { name: 'Ada' }, canWriteBuilds: true } },
+  results: {
+    'workspace.readContext': { branch: 'main', displayName: 'web', terminals: [] },
+    'workspace.list': { workspaces: [{ id: 'ws-1', kind: 'worktree', name: 'web', path: '/nonexistent/web', branch: 'main', hostId: null }], truncated: false }
+  }
+})
+const projectRoutes = (): Parameters<typeof installFakeBuildkite>[0] => ({
+  'GET /v2/organizations': { status: 200, json: [{ slug: 'acme', name: 'Acme' }] },
+  'GET /v2/organizations/acme/pipelines': { status: 200, json: [{ slug: 'web', name: 'Web', repository: 'git@github.com:acme/web.git', web_url: 'https://buildkite.com/acme/web' }] }
+})
+const projectFlow = async (call: (fn: () => Promise<unknown>) => Promise<unknown>, w: Awaited<ReturnType<typeof mountWorker>>) => {
+  await call(() => w.request('project.get'))
+  await call(() => w.request('pipelines.visible', { query: 'web' }))
+  await call(() => w.request('project.choose', { workspaceId: 'ws-1', pipelines: [{ org: 'acme', slug: 'web' }] }))
+  await call(() => w.request('project.choose', { workspaceId: 'ws-1', pipelines: null }))
+  await call(() => w.request('project.choose', { workspaceId: 'missing', pipelines: null }))
+}
+
+test('token never leaks through the project and pipeline flows', () => run(projectRoutes(), projectFlow, projectHost()))
+
+test('token never leaks when the project flows are rejected by Buildkite', () =>
+  run({ 'GET /v2/organizations': { status: 401, json: { message: `bad ${FAKE_TOKEN}` } } }, projectFlow, projectHost()))
+
+test('token never leaks when the project flows hit a network error', () =>
+  run({ 'GET /v2/organizations': 'network-error' }, projectFlow, projectHost()))
+
+test('token never leaks when the project flows are rate limited', () =>
+  run({ 'GET /v2/organizations': { status: 429, headers: { 'RateLimit-Reset': '5' } } }, projectFlow, projectHost()))
+
+test('token never leaks when listing one organization fails', () =>
+  run({ ...projectRoutes(), 'GET /v2/organizations/acme/pipelines': { status: 500, json: { message: FAKE_TOKEN } } }, projectFlow, projectHost()))
+
+test('token never leaks when the workspace changes', () =>
+  run(projectRoutes(), async (call, w) => {
+    await call(async () => { await w.emit('workspace.changed', { context: { branch: 'dev', displayName: 'web', terminals: [] } }) })
+  }, projectHost()))
+
 // The harness itself must catch a leak, or the tests above prove nothing.
 test('harness fails when the token reaches a log line', async () => {
   const host = mockHost()

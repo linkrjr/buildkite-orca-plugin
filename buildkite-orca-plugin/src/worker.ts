@@ -4,6 +4,7 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import { createAuth } from './auth'
 import { registerActions } from './actions'
+import { registerProject } from './project'
 
 export default function activate(orca: OrcaWorkerApi): void {
   const auth = createAuth(orca)
@@ -11,4 +12,5 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('auth.signIn', (input) => auth.signIn(input?.token))
   orca.panels.handle('auth.signOut', () => auth.signOut())
   registerActions(orca, auth)
+  registerProject(orca, auth)
 }

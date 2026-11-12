@@ -19,6 +19,9 @@
         "entry": "src/panel.tsx",
         "ui": "components"
       }
+    ],
+    "events": [
+      { "on": "workspace.changed" }
     ]
   },
   "capabilities": [
@@ -27,6 +30,9 @@
     },
     {
       "kind": "secrets:own"
+    },
+    {
+      "kind": "workspace:read"
     }
   ]
 }
