@@ -235,3 +235,25 @@ test('token never leaks when the actions are refused for a token without write_b
 
 test('token never leaks when the actions are rejected as 401', () =>
   runActions({ [`PUT ${AB}/rebuild`]: { status: 401, json: { message: FAKE_TOKEN } } }))
+// builds.list flows (success and every error path) with a stored token.
+const BUILDS = 'GET /v2/organizations/acme/pipelines/web/builds'
+const runBuilds = (reply: Parameters<typeof installFakeBuildkite>[0][string]) => {
+  const fake = installFakeBuildkite({ [BUILDS]: reply })
+  const host = mockHost({ secrets: { token: FAKE_TOKEN } })
+  return mountWorker(main, { host }).then(async (worker) => {
+    const harness = createLeakHarness(FAKE_TOKEN, worker, host)
+    try {
+      await harness.call(() => worker.request('builds.list', { pipelines: [{ org: 'acme', slug: 'web' }], branch: 'main' }))
+    } finally {
+      harness.assertClean()
+      fake.restore()
+      await worker.deactivate()
+    }
+  })
+}
+
+test('token never leaks when listing builds succeeds', () => runBuilds({ status: 200, json: [] }))
+test('token never leaks when listing builds is rejected', () => runBuilds({ status: 401, json: { message: `bad ${FAKE_TOKEN}` } }))
+test('token never leaks when listing builds hits a network error', () => runBuilds('network-error'))
+test('token never leaks when listing builds is rate limited', () => runBuilds({ status: 429, headers: { 'RateLimit-Reset': '7' } }))
+test('token never leaks when listing builds gets a server error', () => runBuilds({ status: 500, json: { message: FAKE_TOKEN } }))
