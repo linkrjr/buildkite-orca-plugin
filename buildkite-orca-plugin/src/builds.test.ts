@@ -246,3 +246,25 @@ test('builds.list answers token_invalid when another pipeline is unreachable', a
   )
   assert.equal(!answer.ok && answer.error.kind, 'token_invalid')
 })
+
+test('builds.list answers an empty list without throwing when the payload is null', async () => {
+  const fake = installFakeBuildkite({})
+  const worker = await mountWorker(main, { host: mockHost({ secrets: { token: FAKE_TOKEN } }) })
+  try {
+    const answer = (await worker.request('builds.list', null as never)) as Listed
+    assert.deepEqual([numbers(answer), fake.requests.length], [[], 0])
+  } finally {
+    fake.restore()
+    await worker.deactivate()
+  }
+})
+
+test('builds.list refuses a null pipeline entry without calling Buildkite', async () => {
+  const { answer, requests } = await list({}, { pipelines: [null as never] })
+  assert.deepEqual([!answer.ok && answer.error.message, requests.length], ["That pipeline isn't valid", 0])
+})
+
+test('builds.list ignores a branch that is not a string', async () => {
+  const { requests } = await list({ [path()]: { status: 200, json: [] } }, { pipelines: [P], branch: { x: 1 } as never })
+  assert.deepEqual(requests.map((r) => r.url.includes('branch')), [false, false])
+})

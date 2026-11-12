@@ -99,7 +99,7 @@ export function createBuilds(auth: Auth, hasFields: HasFields = blockStepHasFiel
       return { ok: false, error: { kind: 'not_found', message: "That pipeline isn't valid" } }
     }
     const refs = [...new Map(given.map((r) => [`${r.org}/${r.slug}`, r])).values()]
-    const branch = typeof input.branch === 'string' && input.branch ? input.branch : undefined
+    const branch = typeof input?.branch === 'string' && input.branch ? input.branch : undefined
     const results = await Promise.all(refs.map((r) => forPipeline(r, branch)))
     const errors = results.flatMap((r) => (r.ok ? [] : [r.error]))
     if (errors.length > 0) return { ok: false, error: pickError(errors) }
