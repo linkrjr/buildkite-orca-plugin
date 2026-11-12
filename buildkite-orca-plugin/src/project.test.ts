@@ -2,7 +2,7 @@ import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import { createAuth } from './auth'
 import { registerProject } from './project'
 import type { Pipeline, Project, Result } from './protocol'
-import { FAKE_TOKEN, installFakeBuildkite, type FakeRoutes } from './testing/fake-buildkite'
+import { FAKE_TOKEN, installFakeBuildkite, validRoutes, type FakeRoutes } from './testing/fake-buildkite'
 
 const ORGS = [{ slug: 'acme', name: 'Acme Inc' }, { slug: 'other', name: 'Other Org' }]
 const pipe = (slug: string, repository: string, org = 'acme') => ({
@@ -19,7 +19,7 @@ const routes = (acme: unknown[] = [WEB, API], other: unknown[] = [WEB_FORK]): Fa
 })
 
 const WS = { id: 'ws-1', kind: 'worktree', name: 'web', path: '/repos/web', branch: 'main', hostId: null }
-type Opts = { remote?: string | null; context?: unknown; workspaces?: unknown[]; storage?: Record<string, never>; secrets?: Record<string, string> }
+type Opts = { remote?: string | null; context?: unknown; workspaces?: unknown[]; truncated?: boolean; storage?: Record<string, never>; secrets?: Record<string, string> }
 
 async function setup(r: FakeRoutes, o: Opts = {}) {
   const fake = installFakeBuildkite(r)
@@ -29,13 +29,17 @@ async function setup(r: FakeRoutes, o: Opts = {}) {
     storage: { 'auth.profile': { user: { name: 'Ada' }, canWriteBuilds: true }, ...o.storage },
     results: {
       'workspace.readContext': 'context' in o ? o.context : { branch: 'main', displayName: 'web', terminals: [] },
-      'workspace.list': { workspaces: o.workspaces ?? [WS], truncated: false }
+      'workspace.list': { workspaces: o.workspaces ?? [WS], truncated: o.truncated ?? false }
     }
   })
   const worker = await mountWorker({
-    default: (orca) => registerProject(orca, createAuth(orca), {
+    default: (orca) => {
+      const auth = createAuth(orca)
+      orca.panels.handle('auth.signIn', (input) => auth.signIn(input?.token))
+      registerProject(orca, auth, {
       readRemote: async (path) => { remotes.push(path); return 'remote' in o ? o.remote! : 'git@github.com:acme/web.git' }
-    })
+      })
+    }
   }, { host })
   await worker.emit('workspace.changed', { context: 'context' in o ? (o.context as never) : { branch: 'main', displayName: 'web', terminals: [] } })
   remotes.length = 0
@@ -55,7 +59,7 @@ test('project.get auto-matches every visible pipeline whose repository equals th
 test('project.get answers the workspace with its path, remote and branch', async () => {
   const t = await setup(routes())
   const project = value(await t.worker.request('project.get'))
-  assert.deepEqual(project.workspace, { id: 'ws-1', path: '/repos/web', remote: 'git@github.com:acme/web.git', branch: 'main' })
+  assert.deepEqual(project.workspace, { id: 'ws-1', path: '/repos/web', remote: 'github.com:acme/web.git', branch: 'main' })
   assert.deepEqual(t.remotes, ['/repos/web'])
   await t.done()
 })
@@ -98,10 +102,53 @@ test('project.get answers a null workspace and calls Buildkite for nothing when 
   await t.done()
 })
 
-test('project.get falls back to the display name as id when the workspace is not in the list', async () => {
+test('project.get answers an unresolved workspace (no id, no remote) when the workspace is not in the list', async () => {
   const t = await setup(routes(), { workspaces: [] })
   const project = value(await t.worker.request('project.get'))
-  assert.deepEqual(project.workspace, { id: 'web', path: '', remote: null, branch: 'main' })
+  assert.deepEqual(project.workspace, { id: '', path: '', remote: null, branch: 'main' })
+  assert.equal(project.source, 'none')
+  await t.done()
+})
+
+test('project.get treats several workspaces with the same name and branch as unresolved instead of picking the first', async () => {
+  const twin = { ...WS, id: 'ws-9', path: '/other/web' }
+  const t = await setup(routes(), { workspaces: [WS, twin] })
+  const project = value(await t.worker.request('project.get'))
+  assert.deepEqual([project.workspace, project.source, project.pipelines], [{ id: '', path: '', remote: null, branch: 'main' }, 'none', []])
+  assert.deepEqual(t.remotes, [])
+  await t.done()
+})
+
+test('project.get answers an unresolved workspace when the list is truncated and has no match', async () => {
+  const t = await setup(routes(), { workspaces: [{ ...WS, name: 'elsewhere' }], truncated: true })
+  assert.equal(value(await t.worker.request('project.get')).workspace?.id, '')
+  await t.done()
+})
+
+test('project.get does not read a local git remote for a workspace on another host', async () => {
+  const t = await setup(routes(), { workspaces: [{ ...WS, hostId: 'ssh-1' }] })
+  const project = value(await t.worker.request('project.get'))
+  assert.deepEqual([project.workspace?.id, project.workspace?.remote, t.remotes], ['ws-1', null, []])
+  await t.done()
+})
+
+test('project.get never applies a stored choice to an unresolved workspace', async () => {
+  const t = await setup(routes(), { workspaces: [], storage: { 'project.choice.web': [{ org: 'acme', slug: 'api' }] } as never })
+  assert.equal(value(await t.worker.request('project.get')).source, 'none')
+  await t.done()
+})
+
+test('project.choose answers no_workspace for the unresolved workspace id', async () => {
+  const t = await setup(routes(), { workspaces: [] })
+  const answer = await t.worker.request('project.choose', { workspaceId: '', pipelines: null })
+  assert.equal((answer as { error: { kind: string } }).error.kind, 'no_workspace')
+  await t.done()
+})
+
+test('project.get strips credentials from the remote it answers but still matches on it', async () => {
+  const t = await setup(routes(), { remote: 'https://ada:SECRETPAT@github.com/acme/api.git' })
+  const project = value(await t.worker.request('project.get'))
+  assert.deepEqual([project.workspace?.remote, slugs(project.pipelines)], ['https://github.com/acme/api.git', ['acme/api']])
   await t.done()
 })
 
@@ -237,5 +284,68 @@ test('project requests with a rejected token answer token_invalid and sign out',
   const answer = await t.worker.request('project.get')
   assert.equal((answer as { error: { kind: string } }).error.kind, 'token_invalid')
   assert.deepEqual(t.host.data().secrets, {})
+  await t.done()
+})
+
+test('a workspace.changed event posts an empty project for the new workspace when resolving its project fails', async () => {
+  const r = routes()
+  const t = await setup(r, { workspaces: [WS, API_WS], remote: 'git@github.com:acme/api.git' })
+  r['GET /v2/organizations'] = { status: 500 }
+  t.host.respond('workspace.readContext', focus('api').context)
+  await t.worker.emit('workspace.changed', focus('api'))
+  const post = t.worker.posts.find((p) => p.event === 'project.changed')
+  assert.deepEqual(post?.payload, { workspace: { id: 'ws-2', path: '/repos/api', remote: 'github.com:acme/api.git', branch: 'main' }, source: 'none', pipelines: [] })
+  await t.done()
+})
+
+const orgRequests = (t: Awaited<ReturnType<typeof setup>>) => t.fake.requests.filter((q) => q.url.includes('/v2/organizations?')).length
+
+test('the visible pipelines are listed once for project.get, pipelines.visible and project.choose in a row', async () => {
+  const t = await setup(routes())
+  await t.worker.request('project.get')
+  await t.worker.request('pipelines.visible', {})
+  await t.worker.request('project.choose', { workspaceId: 'ws-1', pipelines: null })
+  assert.equal(orgRequests(t), 1)
+  await t.done()
+})
+
+test('the visible pipelines are listed again after the cache expires', async () => {
+  const t = await setup(routes())
+  const now = Date.now
+  try {
+    await t.worker.request('project.get')
+    Date.now = () => now() + 61_000
+    await t.worker.request('project.get')
+  } finally { Date.now = now }
+  assert.equal(orgRequests(t), 2)
+  await t.done()
+})
+
+test('the visible pipelines are listed again after signing out and back in', async () => {
+  const t = await setup({ ...routes(), ...validRoutes() })
+  await t.worker.request('project.get')
+  await t.worker.request('auth.signIn', { token: `${FAKE_TOKEN}_2` })
+  await t.worker.request('project.get')
+  assert.equal(orgRequests(t), 2)
+  await t.done()
+})
+
+test('a failed listing is not cached', async () => {
+  const r = routes()
+  r['GET /v2/organizations'] = { status: 500 }
+  const t = await setup(r)
+  await t.worker.request('pipelines.visible', {})
+  r['GET /v2/organizations'] = { status: 200, json: ORGS }
+  assert.equal(value(await t.worker.request('pipelines.visible', {})).length, 3)
+  await t.done()
+})
+
+test('pipelines.visible answers an error instead of a silent partial list when the 50-page cap is hit', async () => {
+  const full = Array.from({ length: 100 }, (_, i) => pipe(`p${i}`, 'x/y'))
+  const r = routes()
+  r['GET /v2/organizations/acme/pipelines'] = { status: 200, json: full }
+  const t = await setup(r)
+  const answer = await t.worker.request('pipelines.visible', {}) as { ok: boolean; error: { kind: string; message: string } }
+  assert.deepEqual([answer.ok, answer.error.kind, /too many/i.test(answer.error.message)], [false, 'buildkite_error', true])
   await t.done()
 })

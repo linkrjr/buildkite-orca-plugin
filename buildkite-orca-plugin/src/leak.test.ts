@@ -2,6 +2,7 @@
 // Add new flows (and their error paths) here as later tasks land.
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import { createAuth } from './auth'
+import { registerProject } from './project'
 import * as main from './worker'
 import { FAKE_TOKEN, installFakeBuildkite, validRoutes } from './testing/fake-buildkite'
 import { createLeakHarness } from './testing/leak-harness'
@@ -101,6 +102,25 @@ test('token never leaks when the workspace changes', () =>
   run(projectRoutes(), async (call, w) => {
     await call(async () => { await w.emit('workspace.changed', { context: { branch: 'dev', displayName: 'web', terminals: [] } }) })
   }, projectHost()))
+
+// A remote with credentials (https://user:PAT@host/...) must reach no answer, event, log or storage.
+const CRED = 'SECRETPAT_0123456789'
+test('a git remote with credentials never leaks through the project flows', async () => {
+  const fake = installFakeBuildkite(projectRoutes())
+  const host = projectHost()
+  const worker = await mountWorker({
+    default: (orca) => registerProject(orca, createAuth(orca), { readRemote: async () => `https://ada:${CRED}@github.com/acme/web.git` })
+  }, { host })
+  const harness = createLeakHarness(CRED, worker, host)
+  try {
+    await projectFlow((fn) => harness.call(fn), worker)
+    await harness.call(async () => { await worker.emit('workspace.changed', { context: { branch: 'dev', displayName: 'web', terminals: [] } }) })
+  } finally {
+    harness.assertClean()
+    fake.restore()
+    await worker.deactivate()
+  }
+})
 
 // The harness itself must catch a leak, or the tests above prove nothing.
 test('harness fails when the token reaches a log line', async () => {

@@ -10,7 +10,11 @@ const PROFILE_KEY = 'auth.profile'
 type SignedIn = Extract<AuthState, { state: 'signedIn' }>
 
 export function createAuth(orca: OrcaWorkerApi) {
-  const setState = (state: AuthState) => orca.panels.post('auth.changed', state)
+  const listeners: (() => void)[] = []
+  const setState = (state: AuthState) => {
+    listeners.forEach((l) => l())
+    orca.panels.post('auth.changed', state)
+  }
 
   async function status(): Promise<AuthState> {
     const token = await orca.secrets.get(TOKEN_KEY)
@@ -84,7 +88,10 @@ export function createAuth(orca: OrcaWorkerApi) {
     return result
   }
 
-  return { status, signIn, signOut: () => signOut(), request }
+  /** Calls `listener` whenever the token changes: sign-in (new or replaced) and sign-out. */
+  const onChange = (listener: () => void) => { listeners.push(listener) }
+
+  return { status, signIn, signOut: () => signOut(), request, onChange }
 }
 
 export type Auth = ReturnType<typeof createAuth>

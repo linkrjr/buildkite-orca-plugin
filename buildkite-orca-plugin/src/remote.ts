@@ -22,6 +22,13 @@ export function normalizeRemote(remote: string | null | undefined): string | nul
   return `${host}/${path}`.toLowerCase()
 }
 
+/** The remote without its userinfo (user, password or a token used as the user), so a credential
+ *  never leaves the worker. */
+export function stripCredentials(remote: string | null): string | null {
+  if (remote === null) return null
+  return remote.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, '$1').replace(/^[^@/\s:]+@(?=[^:/\s]+:(?!\/\/))/, '')
+}
+
 type ExecFile = (
   file: string,
   args: string[],

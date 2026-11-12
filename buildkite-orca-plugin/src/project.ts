@@ -3,15 +3,21 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { Auth } from './auth'
 import type { Pipeline, PipelineRef, Project, Result, Workspace } from './protocol'
-import { normalizeRemote, readGitRemote } from './remote'
+import { normalizeRemote, readGitRemote, stripCredentials } from './remote'
 
 const PER_PAGE = 100
 const MAX_PAGES = 50
+const CACHE_TTL_MS = 60_000
+/** A workspace the host did not identify uniquely: it has no id, so no choice is stored for it. */
+const UNRESOLVED = ''
 const choiceKey = (workspaceId: string) => `project.choice.${workspaceId}`
 const refKey = (p: PipelineRef) => `${p.org}/${p.slug}`
 
 type Deps = { readRemote: (path: string) => Promise<string | null> }
-type Listed = { workspaces: { id: string; name: string; path: string; branch: string | null }[] }
+type Listed = {
+  workspaces: { id: string; name: string; path: string; branch: string | null; hostId?: string | null }[]
+  truncated?: boolean
+}
 
 export function registerProject(orca: OrcaWorkerApi, auth: Auth, deps: Deps = { readRemote: readGitRemote }): void {
   /** Every page of a Buildkite collection (pages are full until the last one). */
@@ -22,12 +28,26 @@ export function registerProject(orca: OrcaWorkerApi, auth: Auth, deps: Deps = { 
       if (!res.ok) return res
       const items = Array.isArray(res.value) ? (res.value as Record<string, any>[]) : []
       all.push(...items)
-      if (items.length < PER_PAGE) break
+      if (items.length < PER_PAGE) return { ok: true, value: all }
     }
-    return { ok: true, value: all }
+    return { ok: false, error: { kind: 'buildkite_error', message: 'Too many Buildkite pipelines to list' } }
   }
 
+  // Short-lived cache of the listing, dropped whenever the token changes. `generation` keeps a
+  // listing that was in flight during a sign-in/out from being cached.
+  let cache: { at: number; pipelines: Pipeline[] } | null = null
+  let generation = 0
+  auth.onChange(() => { cache = null; generation++ })
+
   async function visiblePipelines(): Promise<Result<Pipeline[]>> {
+    if (cache && Date.now() - cache.at < CACHE_TTL_MS) return { ok: true, value: cache.pipelines }
+    const started = generation
+    const listed = await listVisiblePipelines()
+    if (listed.ok && started === generation) cache = { at: Date.now(), pipelines: listed.value }
+    return listed
+  }
+
+  async function listVisiblePipelines(): Promise<Result<Pipeline[]>> {
     const orgs = await getAll('/v2/organizations')
     if (!orgs.ok) return orgs
     const pipelines: Pipeline[] = []
@@ -48,16 +68,18 @@ export function registerProject(orca: OrcaWorkerApi, auth: Auth, deps: Deps = { 
     return { ok: true, value: pipelines }
   }
 
-  const listWorkspaces = async (): Promise<Listed['workspaces']> => {
+  const listWorkspaces = async (): Promise<Listed> => {
     try {
-      return ((await orca.host.call('workspace.list')) as Listed).workspaces
+      return (await orca.host.call('workspace.list')) as Listed
     } catch {
-      return []
+      return { workspaces: [] }
     }
   }
 
-  async function withRemote(id: string, path: string, branch: string | null): Promise<Workspace> {
-    return { id, path, remote: path ? await deps.readRemote(path) : null, branch }
+  /** The git remote is read only for a workspace on this machine, and never leaves with credentials. */
+  async function toWorkspace(w: Listed['workspaces'][number], branch: string | null): Promise<Workspace> {
+    const local = w.path && !w.hostId
+    return { id: w.id, path: w.path, remote: stripCredentials(local ? await deps.readRemote(w.path) : null), branch }
   }
 
   async function activeWorkspace(): Promise<Workspace | null> {
@@ -68,22 +90,29 @@ export function registerProject(orca: OrcaWorkerApi, auth: Auth, deps: Deps = { 
       return null
     }
     if (!context) return null
-    const found = (await listWorkspaces()).find((w) => w.name === context.displayName && w.branch === context.branch)
-    return found ? withRemote(found.id, found.path, context.branch) : withRemote(context.displayName, '', context.branch)
+    // The host gives no id here: match by name and branch, and only trust a single match. Several
+    // (or none, e.g. past a truncated list) is unresolved, never "the first".
+    const { workspaces } = await listWorkspaces()
+    const matches = workspaces.filter((w) => w.name === context.displayName && w.branch === context.branch)
+    if (matches.length === 1) return toWorkspace(matches[0], context.branch)
+    return { id: UNRESOLVED, path: '', remote: null, branch: context.branch }
   }
 
   async function workspaceById(id: string): Promise<Workspace | null> {
+    if (id === UNRESOLVED) return null
     const active = await activeWorkspace()
     if (active?.id === id) return active
-    const found = (await listWorkspaces()).find((w) => w.id === id)
-    return found ? withRemote(found.id, found.path, found.branch) : null
+    const found = (await listWorkspaces()).workspaces.find((w) => w.id === id)
+    return found ? toWorkspace(found, found.branch) : null
   }
 
   async function projectFor(workspace: Workspace | null): Promise<Result<Project>> {
     if (!workspace) return { ok: true, value: { workspace: null, source: 'none', pipelines: [] } }
     const visible = await visiblePipelines()
     if (!visible.ok) return visible
-    const chosen = (await orca.storage.get(choiceKey(workspace.id))) as PipelineRef[] | undefined
+    const chosen = workspace.id === UNRESOLVED
+      ? undefined
+      : ((await orca.storage.get(choiceKey(workspace.id))) as PipelineRef[] | undefined)
     if (Array.isArray(chosen)) {
       const wanted = new Set(chosen.map(refKey))
       const pipelines = visible.value.filter((p) => wanted.has(refKey(p)))
@@ -132,7 +161,9 @@ export function registerProject(orca: OrcaWorkerApi, auth: Auth, deps: Deps = { 
     if (previous === key) return
     // Signed out: nothing to look up (and no token to call it a rejection).
     if ((await auth.status()).state !== 'signedIn') return
-    const project = await projectFor(await activeWorkspace())
-    if (project.ok) orca.panels.post('project.changed', project.value)
+    const workspace = await activeWorkspace()
+    const project = await projectFor(workspace)
+    // Even when the lookup fails, the panel must not keep the previous workspace's project.
+    orca.panels.post('project.changed', project.ok ? project.value : { workspace, source: 'none', pipelines: [] })
   })
 }

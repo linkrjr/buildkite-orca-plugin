@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { normalizeRemote, readGitRemote } from './remote'
+import { normalizeRemote, readGitRemote, stripCredentials } from './remote'
 
 const KEY = 'github.com/acme/web'
 
@@ -39,6 +39,30 @@ test('answers null for an empty or unparseable remote', () => {
   assert.equal(normalizeRemote(''), null)
   assert.equal(normalizeRemote(null), null)
   assert.equal(normalizeRemote('not a remote'), null)
+})
+
+test('stripCredentials removes the user and password of an https remote', () => {
+  assert.equal(stripCredentials('https://ada:SECRETPAT@github.com/acme/web.git'), 'https://github.com/acme/web.git')
+})
+
+test('stripCredentials removes a token used as the user of an https remote', () => {
+  assert.equal(stripCredentials('https://SECRETPAT@github.com:8443/acme/web'), 'https://github.com:8443/acme/web')
+})
+
+test('stripCredentials removes the user of an ssh:// remote', () => {
+  assert.equal(stripCredentials('ssh://git@github.com/acme/web.git'), 'ssh://github.com/acme/web.git')
+})
+
+test('stripCredentials removes the user of an scp-style remote', () => {
+  assert.equal(stripCredentials('SECRETPAT@github.com:acme/web.git'), 'github.com:acme/web.git')
+})
+
+test('stripCredentials leaves a remote without credentials unchanged', () => {
+  assert.equal(stripCredentials('https://github.com/acme/web.git'), 'https://github.com/acme/web.git')
+})
+
+test('stripCredentials passes null through', () => {
+  assert.equal(stripCredentials(null), null)
 })
 
 type Node = { mkdtemp(p: string): Promise<string>; rm(p: string, o: object): Promise<void> }
