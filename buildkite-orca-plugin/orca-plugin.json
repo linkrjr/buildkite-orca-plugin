@@ -24,6 +24,9 @@
   "capabilities": [
     {
       "kind": "storage:own"
+    },
+    {
+      "kind": "secrets:own"
     }
   ]
 }
