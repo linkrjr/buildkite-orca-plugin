@@ -55,3 +55,30 @@ test('maps a fetch failure to network with a message that omits the token', asyn
   assert.equal(!r.ok && r.error.kind, 'network')
   assert.equal(JSON.stringify(r).includes(FAKE_TOKEN), false)
 })
+
+const badPaths = ['@evil.com/v2/user', '/v1/user', 'v2/user', '//evil.com/v2/x', '/v2/..\\x', '/v2/x#frag', '/v2/x@evil.com', '/v2//x']
+for (const path of badPaths) {
+  test(`refuses path ${JSON.stringify(path)} without calling fetch`, async () => {
+    const fake = installFakeBuildkite({})
+    const r = await bkRequest(FAKE_TOKEN, 'GET', path)
+    assert.equal(!r.ok && r.error.kind, 'buildkite_error')
+    assert.deepEqual(fake.requests, [])
+    fake.restore()
+  })
+}
+
+test('every request URL starts with https://api.buildkite.com/v2/', async () => {
+  const fake = installFakeBuildkite({ 'GET /v2/organizations': { status: 200, json: [] } })
+  await bkRequest(FAKE_TOKEN, 'GET', '/v2/organizations?page=2')
+  assert.equal(fake.requests[0].url.startsWith('https://api.buildkite.com/v2/'), true)
+  fake.restore()
+})
+
+test('does not follow redirects, so the token cannot be forwarded to another host', async () => {
+  let seen: unknown
+  const original = globalThis.fetch
+  globalThis.fetch = (async (_u: unknown, init?: { redirect?: string }) => { seen = init?.redirect; return new Response('{}') }) as typeof fetch
+  await bkRequest(FAKE_TOKEN, 'GET', '/v2/user')
+  globalThis.fetch = original
+  assert.equal(seen, 'error')
+})

@@ -1,4 +1,5 @@
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
+import { createAuth } from './auth'
 import * as main from './worker'
 import { FAKE_TOKEN, installFakeBuildkite, validRoutes } from './testing/fake-buildkite'
 
@@ -104,4 +105,49 @@ test('auth.signOut deletes the stored token and posts signedOut', async () => {
   assert.deepEqual(await worker.request('auth.status'), { state: 'signedOut' })
   assert.deepEqual(worker.posts.at(-1), { event: 'auth.changed', payload: { state: 'signedOut' } })
   await done()
+})
+
+test('auth.signIn answers token_invalid for a token with a newline without calling Buildkite', async () => {
+  const { worker, fake, done } = await setup()
+  const answer = await worker.request('auth.signIn', { token: 'abc\ndef' })
+  assert.equal(!answer.ok && answer.error.kind, 'token_invalid')
+  assert.deepEqual(fake.requests, [])
+  await done()
+})
+
+test('auth.signIn answers token_invalid for a token with a non-Latin-1 character without calling Buildkite', async () => {
+  const { worker, fake, done } = await setup()
+  const answer = await worker.request('auth.signIn', { token: 'abc\u2603' })
+  assert.equal(!answer.ok && answer.error.kind, 'token_invalid')
+  assert.deepEqual(fake.requests, [])
+  await done()
+})
+
+test('auth.signIn removes the new token and answers an error when saving the profile fails', async () => {
+  const fake = installFakeBuildkite(validRoutes())
+  const host = mockHost()
+  const worker = await mountWorker({ default: (orca) => {
+    const failing = { ...orca, storage: { ...orca.storage, set: async () => { throw new Error('disk full') } } } as typeof orca
+    const auth = createAuth(failing)
+    orca.panels.handle('auth.signIn', ({ token }: { token: string }) => auth.signIn(token) as never)
+  } }, { host })
+  const answer = (await worker.request('auth.signIn', { token: FAKE_TOKEN })) as { ok: boolean }
+  assert.equal(answer.ok, false)
+  assert.deepEqual(host.data().secrets, {})
+  fake.restore()
+  await worker.deactivate()
+})
+
+test('auth.signIn restores the old token when saving the profile fails during replace', async () => {
+  const fake = installFakeBuildkite(validRoutes())
+  const host = mockHost({ secrets: { token: 'old_token' } })
+  const worker = await mountWorker({ default: (orca) => {
+    const failing = { ...orca, storage: { ...orca.storage, set: async () => { throw new Error('disk full') } } } as typeof orca
+    const auth = createAuth(failing)
+    orca.panels.handle('auth.signIn', ({ token }: { token: string }) => auth.signIn(token) as never)
+  } }, { host })
+  await worker.request('auth.signIn', { token: FAKE_TOKEN })
+  assert.deepEqual(host.data().secrets, { token: 'old_token' })
+  fake.restore()
+  await worker.deactivate()
 })

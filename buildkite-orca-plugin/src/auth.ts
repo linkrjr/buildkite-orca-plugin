@@ -36,13 +36,21 @@ export function createAuth(orca: OrcaWorkerApi) {
 
   async function signIn(raw: string): Promise<Result<AuthState>> {
     const token = raw.trim()
-    if (!token) {
+    // A header-unsafe token (newline, non-Latin-1) would make fetch throw before any request.
+    if (!token || !/^[\x21-\x7e]+$/.test(token)) {
       return { ok: false, error: { kind: 'token_invalid', message: 'Buildkite rejected this token' } }
     }
     const checked = await validate(token)
     if (!checked.ok) return checked
-    await orca.secrets.set(TOKEN_KEY, token)
-    await orca.storage.set(PROFILE_KEY, checked.value)
+    const previous = await orca.secrets.get(TOKEN_KEY)
+    try {
+      await orca.secrets.set(TOKEN_KEY, token)
+      await orca.storage.set(PROFILE_KEY, checked.value)
+    } catch {
+      // Keep token and profile consistent: put back the old token, or drop the new one.
+      await (previous ? orca.secrets.set(TOKEN_KEY, previous) : orca.secrets.delete(TOKEN_KEY)).catch(() => {})
+      return { ok: false, error: { kind: 'buildkite_error', message: "Couldn't save the token" } }
+    }
     const state: AuthState = { state: 'signedIn', ...checked.value }
     setState(state)
     return { ok: true, value: state }
@@ -65,6 +73,7 @@ export function createAuth(orca: OrcaWorkerApi) {
   ): Promise<Result<unknown>> {
     const token = await orca.secrets.get(TOKEN_KEY)
     if (!token) {
+      await signOut('token_rejected')
       return { ok: false, error: { kind: 'token_invalid', message: 'Your Buildkite token is no longer valid' } }
     }
     const result = await bkRequest(token, method, path, body)

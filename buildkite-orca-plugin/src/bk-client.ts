@@ -25,12 +25,19 @@ function mapStatus(status: number, headers: Headers): BkError {
   }
 }
 
+// Callers build paths from panel-supplied values; keep them on api.buildkite.com/v2 (a `?` query
+// is allowed, but nothing that can change the host, the path root or add a fragment).
+const SAFE_PATH = /^(?!.*(\/\/|[@\\#]))\/v2\/[\x21-\x7e]*$/
+
 export async function bkRequest(
   token: string,
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
   body?: unknown
 ): Promise<Result<unknown>> {
+  if (!SAFE_PATH.test(path)) {
+    return fail({ kind: 'buildkite_error', message: 'Buildkite returned an error' })
+  }
   let response: Response
   try {
     response = await fetch(`${API}${path}`, {
@@ -40,7 +47,8 @@ export async function bkRequest(
         Accept: 'application/json',
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' })
       },
-      body: body === undefined ? undefined : JSON.stringify(body)
+      body: body === undefined ? undefined : JSON.stringify(body),
+      redirect: 'error'
     })
   } catch {
     return fail({ kind: 'network', message: "Can't reach Buildkite" })

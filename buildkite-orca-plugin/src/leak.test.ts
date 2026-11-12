@@ -1,6 +1,7 @@
 // AC5: runs every worker flow with a known token and asserts it surfaces in no output.
 // Add new flows (and their error paths) here as later tasks land.
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
+import { createAuth } from './auth'
 import * as main from './worker'
 import { FAKE_TOKEN, installFakeBuildkite, validRoutes } from './testing/fake-buildkite'
 import { createLeakHarness } from './testing/leak-harness'
@@ -77,3 +78,32 @@ test('harness fails when the token reaches non-secret storage', async () => {
   assert.throws(() => harness.assertClean(), /token leaked into storage/)
   await worker.deactivate()
 })
+
+// Stored-token path (auth.request): the 401 flow deletes the secret and posts events.
+const authedWorker = (orca: Parameters<typeof createAuth>[0]) => {
+  const auth = createAuth(orca)
+  orca.panels.handle('pipelines.visible', async () => auth.request('GET', '/v2/organizations') as never)
+}
+const runAuthed = (routes: Parameters<typeof installFakeBuildkite>[0], secrets: Record<string, string>) => {
+  const fake = installFakeBuildkite(routes)
+  const host = mockHost({ secrets })
+  return mountWorker({ default: authedWorker }, { host }).then(async (worker) => {
+    const harness = createLeakHarness(FAKE_TOKEN, worker, host)
+    try {
+      await harness.call(() => worker.request('pipelines.visible'))
+    } finally {
+      harness.assertClean()
+      fake.restore()
+      await worker.deactivate()
+    }
+  })
+}
+
+test('token never leaks when a stored token is rejected during normal use', () =>
+  runAuthed({ 'GET /v2/organizations': { status: 401, json: { message: `bad ${FAKE_TOKEN}` } } }, { token: FAKE_TOKEN }))
+
+test('token never leaks on a network error with a stored token', () =>
+  runAuthed({ 'GET /v2/organizations': 'network-error' }, { token: FAKE_TOKEN }))
+
+test('token never leaks on a successful request with a stored token', () =>
+  runAuthed({ 'GET /v2/organizations': { status: 200, json: [] } }, { token: FAKE_TOKEN }))
