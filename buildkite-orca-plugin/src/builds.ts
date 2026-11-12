@@ -1,29 +1,42 @@
 // builds.list: fetch each pipeline's builds (with jobs), map to the contract and order them.
 import type { Auth } from './auth'
+import { blockStepHasFields, type BlockJobRef } from './block-fields'
+import { SLUG } from './actions'
 import type { Build, BkError, Job, PipelineRef, Result } from './protocol'
 
 const LIMIT = 20
 const ACTIVE = ['running', 'scheduled', 'blocked', 'canceling']
-const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const JOB_TYPES: Job['type'][] = ['script', 'manual', 'waiter', 'trigger']
 
 type Raw = Record<string, any>
 type ListInput = { pipelines: PipelineRef[]; branch?: string }
 type Listed = { builds: Build[]; fetchedAt: string }
 
-function toJob(j: Raw): Job {
+const firstLine = (v: unknown) => String(v ?? '').split('\n')[0]
+
+// Manual (block) jobs carry `label`; script jobs carry `name`, or just a `command`.
+function jobName(j: Raw): string {
+  const pick = j.type === 'manual' ? [j.label, j.name] : [j.name, j.label, j.command]
+  return firstLine(pick.find((v) => typeof v === 'string' && v) ?? j.type)
+}
+
+type HasFields = (job: BlockJobRef) => Promise<boolean>
+
+// Only blocked manual jobs ask whether the step has input fields, which keeps polling cheap.
+async function toJob(j: Raw, hasFields: HasFields): Promise<Job> {
   const type: Job['type'] = JOB_TYPES.includes(j.type) ? j.type : 'script'
+  const blocked = type === 'manual' && j.state === 'blocked'
   return {
     id: String(j.id ?? ''),
     type,
-    name: String(j.name ?? j.label ?? j.type ?? ''),
+    name: jobName(j),
     state: String(j.state ?? ''),
-    unblockable: type === 'manual' && j.state === 'blocked' && Boolean(j.unblock_url || j.unblockable),
-    hasFields: Array.isArray(j.fields) && j.fields.length > 0
+    unblockable: type === 'manual' && j.unblockable === true,
+    hasFields: blocked ? await hasFields({ id: String(j.id ?? ''), graphql_id: j.graphql_id }) : false
   }
 }
 
-function toBuild(ref: PipelineRef, b: Raw): Build {
+async function toBuild(ref: PipelineRef, b: Raw, hasFields: HasFields): Promise<Build> {
   return {
     org: ref.org,
     pipelineSlug: ref.slug,
@@ -37,7 +50,7 @@ function toBuild(ref: PipelineRef, b: Raw): Build {
     startedAt: b.started_at ?? null,
     finishedAt: b.finished_at ?? null,
     webUrl: String(b.web_url ?? ''),
-    jobs: Array.isArray(b.jobs) ? b.jobs.map(toJob) : []
+    jobs: Array.isArray(b.jobs) ? await Promise.all(b.jobs.map((j: Raw) => toJob(j, hasFields))) : []
   }
 }
 
@@ -50,7 +63,7 @@ export function orderBuilds(builds: Build[]): Build[] {
   return [...active, ...finished].slice(0, LIMIT)
 }
 
-export function createBuilds(auth: Auth) {
+export function createBuilds(auth: Auth, hasFields: HasFields = blockStepHasFields) {
   // Two cheap calls per pipeline: the newest builds, and the active ones (which may be older
   // than the newest 20).
   async function forPipeline(ref: PipelineRef, branch?: string): Promise<Result<Build[]>> {
@@ -62,8 +75,9 @@ export function createBuilds(auth: Auth) {
     if (!recent.ok) return recent
     if (!running.ok) return running
     const byNumber = new Map<number, Build>()
-    for (const raw of [...(recent.value as Raw[]), ...(running.value as Raw[])]) {
-      const build = toBuild(ref, raw)
+    // Later entries win, so the active call's fresher copy replaces the recent call's.
+    const raws = [...(recent.value as Raw[]), ...(running.value as Raw[])]
+    for (const build of await Promise.all(raws.map((raw) => toBuild(ref, raw, hasFields)))) {
       byNumber.set(build.number, build)
     }
     return { ok: true, value: [...byNumber.values()] }
@@ -78,7 +92,7 @@ export function createBuilds(auth: Auth) {
   async function list(input: ListInput): Promise<Result<Listed>> {
     const refs = Array.isArray(input?.pipelines) ? input.pipelines : []
     if (!refs.every((r) => SLUG.test(String(r?.org)) && SLUG.test(String(r?.slug)))) {
-      return { ok: false, error: { kind: 'not_found', message: 'Unknown pipeline' } }
+      return { ok: false, error: { kind: 'not_found', message: "That pipeline isn't valid" } }
     }
     const branch = typeof input.branch === 'string' && input.branch ? input.branch : undefined
     const results = await Promise.all(refs.map((r) => forPipeline(r, branch)))

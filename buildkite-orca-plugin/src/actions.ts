@@ -5,7 +5,7 @@ import type { Auth } from './auth'
 import { blockStepHasFields, type BlockJobRef } from './block-fields'
 import type { BkError, Result } from './protocol'
 
-const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/
+export const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/
 const JOB_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,99}$/
 
 type Target = { org: string; pipeline: string; number: number }

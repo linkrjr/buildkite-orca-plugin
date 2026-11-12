@@ -1,5 +1,7 @@
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import * as main from './worker'
+import type { Auth } from './auth'
+import { createBuilds } from './builds'
 import type { Build, Result } from './protocol'
 import { FAKE_TOKEN, installFakeBuildkite, type FakeRoutes } from './testing/fake-buildkite'
 
@@ -98,23 +100,71 @@ test('builds.list maps a build to the contract shape', async () => {
   })
 })
 
-test('builds.list maps jobs including block steps with and without fields', async () => {
-  const jobs = [
-    { id: 'j1', type: 'script', name: 'Test', state: 'passed' },
-    { id: 'j2', type: 'manual', label: 'Deploy?', state: 'blocked', unblock_url: 'https://x/unblock' },
-    { id: 'j3', type: 'manual', label: 'Pick', state: 'blocked', unblock_url: 'https://x/u', fields: [{ key: 'a' }] },
-    { id: 'j4', type: 'manual', label: 'Done', state: 'unblocked' }
-  ]
+const manual = (id: string, label: string, state: string, extra: Record<string, unknown> = {}) => ({
+  id,
+  graphql_id: `gid-${id}`,
+  type: 'manual',
+  label,
+  state,
+  web_url: `https://buildkite.com/acme/web/builds/5#${id}`,
+  unblockable: state === 'blocked',
+  unblock_url: `https://api.buildkite.com/v2/organizations/acme/pipelines/web/builds/5/jobs/${id}/unblock`,
+  ...extra
+})
+
+async function jobsOf(jobs: unknown[]) {
   const { answer } = await list(
     { [path()]: { status: 200, json: [bk(5, 'blocked', '2026-01-01T00:00:00Z', { jobs })] } },
     { pipelines: [P] }
   )
-  assert.deepEqual(answer.ok && answer.value.builds[0].jobs, [
-    { id: 'j1', type: 'script', name: 'Test', state: 'passed', unblockable: false, hasFields: false },
-    { id: 'j2', type: 'manual', name: 'Deploy?', state: 'blocked', unblockable: true, hasFields: false },
-    { id: 'j3', type: 'manual', name: 'Pick', state: 'blocked', unblockable: true, hasFields: true },
-    { id: 'j4', type: 'manual', name: 'Done', state: 'unblocked', unblockable: false, hasFields: false }
+  return answer.ok ? answer.value.builds[0].jobs : []
+}
+
+test('builds.list names a manual job from its label', async () => {
+  const [job] = await jobsOf([manual('j2', 'Deploy?', 'blocked')])
+  assert.equal(job.name, 'Deploy?')
+})
+
+test('builds.list names a script job from its name', async () => {
+  const [job] = await jobsOf([{ id: 'j1', graphql_id: 'g', type: 'script', name: 'Test', state: 'passed' }])
+  assert.equal(job.name, 'Test')
+})
+
+test('builds.list falls back to the command for an unnamed script job', async () => {
+  const [job] = await jobsOf([{ id: 'j1', type: 'script', name: null, command: 'make test\nmake lint', state: 'passed' }])
+  assert.equal(job.name, 'make test')
+})
+
+test('builds.list keeps unblockable as Buildkite says for a manual job', async () => {
+  const jobs = await jobsOf([manual('j2', 'A', 'blocked'), manual('j3', 'B', 'blocked', { unblockable: false })])
+  assert.deepEqual(jobs.map((j) => j.unblockable), [true, false])
+})
+
+test('builds.list marks a blocked manual job as having fields since nothing confirms otherwise', async () => {
+  const [job] = await jobsOf([manual('j2', 'Deploy?', 'blocked')])
+  assert.equal(job.hasFields, true)
+})
+
+test('builds.list leaves hasFields false for jobs that are not blocked manual jobs', async () => {
+  const jobs = await jobsOf([
+    { id: 'j1', type: 'script', name: 'Test', state: 'passed' },
+    manual('j4', 'Done', 'unblocked'),
+    { id: 'j5', type: 'waiter', state: 'passed' }
   ])
+  assert.deepEqual(jobs.map((j) => j.hasFields), [false, false, false])
+})
+
+test('builds.list does not look up fields for jobs that are not blocked manual jobs', async () => {
+  const asked: string[] = []
+  const auth = { request: async () => ({ ok: true, value: [bk(5, 'passed', '2026-01-01T00:00:00Z', { jobs: [manual('j4', 'Done', 'unblocked')] })] }) } as unknown as Auth
+  await createBuilds(auth, async (j) => (asked.push(j.id), false)).list({ pipelines: [P] })
+  assert.deepEqual(asked, [])
+})
+
+test('builds.list takes hasFields from the lookup for a blocked manual job', async () => {
+  const auth = { request: async () => ({ ok: true, value: [bk(5, 'blocked', '2026-01-01T00:00:00Z', { jobs: [manual('j2', 'Go', 'blocked')] })] }) } as unknown as Auth
+  const answer = await createBuilds(auth, async () => false).list({ pipelines: [P] })
+  assert.equal(answer.ok && answer.value.builds[0].jobs[0].hasFields, false)
 })
 
 test('builds.list asks Buildkite only for the given branch', async () => {
