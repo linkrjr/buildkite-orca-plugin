@@ -23,9 +23,14 @@ export function createLeakHarness(token: string, worker: TestWorker, host: MockH
     originals.set(m, console[m])
     console[m] = (...args: unknown[]) => { terminal.push(args.map(String).join(' ')) }
   }
-  const capture = (chunk: unknown) => { terminal.push(String(chunk)); return true }
-  process.stdout.write = capture
-  process.stderr.write = capture
+  // The Node test runner reports each result to its parent as binary chunks on stdout; swallowing
+  // those silently drops tests (failures included), so binary chunks are scanned and passed on.
+  const capturing = (real: (chunk: unknown) => boolean) => (chunk: unknown) => {
+    terminal.push(String(chunk))
+    return typeof chunk === 'string' ? true : real(chunk)
+  }
+  process.stdout.write = capturing(stdout)
+  process.stderr.write = capturing(stderr)
 
   const restore = () => {
     for (const m of METHODS) console[m] = originals.get(m)!
