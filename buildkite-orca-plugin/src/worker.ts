@@ -2,6 +2,7 @@
 // this file when it loads: no build step. A save restarts it and drops its in-memory state, so
 // the total lives in orca.storage (the storage:own capability).
 import type { OrcaWorkerApi } from 'orca/worker'
+import { createAuth } from './auth'
 
 const TOTAL = 'total'
 
@@ -11,6 +12,11 @@ async function storedTotal(orca: OrcaWorkerApi): Promise<number> {
 }
 
 export default function activate(orca: OrcaWorkerApi): void {
+  const auth = createAuth(orca)
+  orca.panels.handle('auth.status', () => auth.status())
+  orca.panels.handle('auth.signIn', (input) => auth.signIn(input?.token))
+  orca.panels.handle('auth.signOut', () => auth.signOut())
+
   orca.panels.handle('counter.get', async () => ({ total: await storedTotal(orca) }))
 
   orca.panels.handle('counter.add', async ({ by }) => {
