@@ -79,9 +79,7 @@ function ErrorNotice({ error }: { error: BkError }) {
     )
   }
   return (
-    <Callout tone="danger" title={error.message}>
-      {error.kind === 'buildkite_error' ? 'This machine may have no OS key store available to Orca.' : ''}
-    </Callout>
+    <Callout tone="danger" title={error.message} />
   )
 }
 

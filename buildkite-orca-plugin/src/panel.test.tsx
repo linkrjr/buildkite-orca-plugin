@@ -84,6 +84,25 @@ test('network failure and storage failure show their callouts and clear the fiel
   await view2.unmount()
 })
 
+test('other worker errors show the worker message as is (Buildkite 5xx, rate limit, forbidden, not found)', async () => {
+  const messages: [string, string][] = [
+    ['buildkite_error', 'Buildkite returned an error (503)'],
+    ['rate_limited', 'Buildkite is rate limiting requests'],
+    ['forbidden', 'This token cannot do that'],
+    ['not_found', 'Not found']
+  ]
+  for (const [kind, message] of messages) {
+    const view = await mount(panel, {
+      host: host(signedOut, () => ({ ok: false, error: { kind, message } as never }))
+    })
+    await view.type({ label: 'Buildkite API token' }, TOKEN, { submit: true })
+    assert.ok(has(view, message), message)
+    assert.ok(!has(view, 'key store'), 'no storage hint')
+    assert.equal(view.valueOf({ label: 'Buildkite API token' }), '')
+    await view.unmount()
+  }
+})
+
 test('Sign out returns to the form (AC7)', async () => {
   const view = await mount(panel, { host: host(signedIn('Ana'), rejected) })
   await view.press({ label: 'Account' })
