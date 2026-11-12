@@ -167,3 +167,19 @@ test('auth.signIn answers token_invalid for a non-string token without calling B
   assert.deepEqual(fake.requests, [])
   await done()
 })
+
+test('auth.signIn answers token_invalid for a null payload without calling Buildkite', async () => {
+  const { worker, fake, done } = await setup()
+  const answer = await (worker.request as (m: string, p: unknown) => Promise<{ ok: boolean; error?: { kind: string; message: string } }>)('auth.signIn', null)
+  assert.deepEqual(answer, { ok: false, error: { kind: 'token_invalid', message: 'Buildkite rejected this token' } })
+  assert.deepEqual(fake.requests, [])
+  await done()
+})
+
+test('auth.signIn answers token_invalid when no payload is sent without calling Buildkite', async () => {
+  const { worker, fake, done } = await setup()
+  const answer = await (worker.request as (m: string) => Promise<{ ok: boolean; error?: { kind: string } }>)('auth.signIn')
+  assert.equal(answer.error?.kind, 'token_invalid')
+  assert.deepEqual(fake.requests, [])
+  await done()
+})

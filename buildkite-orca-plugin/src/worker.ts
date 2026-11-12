@@ -14,7 +14,7 @@ async function storedTotal(orca: OrcaWorkerApi): Promise<number> {
 export default function activate(orca: OrcaWorkerApi): void {
   const auth = createAuth(orca)
   orca.panels.handle('auth.status', () => auth.status())
-  orca.panels.handle('auth.signIn', ({ token }) => auth.signIn(token))
+  orca.panels.handle('auth.signIn', (input) => auth.signIn(input?.token))
   orca.panels.handle('auth.signOut', () => auth.signOut())
 
   orca.panels.handle('counter.get', async () => ({ total: await storedTotal(orca) }))
