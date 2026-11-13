@@ -20,6 +20,7 @@ import {
   Stack,
   Text
 } from 'orca'
+import { BuildsArea } from './builds-view'
 import type { BkError, Pipeline, PipelineRef, Project } from './protocol'
 
 const keyOf = (p: PipelineRef): string => `${p.org}/${p.slug}`
@@ -27,9 +28,15 @@ const ALL = 'all'
 
 export const project = atom<Project | null>(null)
 const loadError = atom<BkError | null>(null)
-// Pipeline filter per workspace id, in plugin storage. Never written for an unresolvable id ('').
-const prefs = atom<Record<string, { pipeline?: string; [other: string]: unknown }>>('panel.prefs', {}, { persist: 'storage' })
-const unsavedFilter = atom(ALL)
+// Per-workspace preferences by workspace id, in plugin storage. Never written for an unresolvable
+// id (''): those live in `unsaved` for this panel run only.
+export type WorkspacePrefs = { pipeline?: string; branchOnly?: boolean; expanded?: string[] }
+const prefs = atom<Record<string, WorkspacePrefs>>('panel.prefs', {}, { persist: 'storage' })
+const unsaved = atom<WorkspacePrefs>({})
+
+/** Called when the selected pipelines or workspace change, so the builds list can reload. */
+export const selectionListeners = new Set<() => void>()
+const notifySelection = (): void => selectionListeners.forEach((f) => f())
 
 const picking = atom(false)
 const visible = atom<Pipeline[] | null>(null)
@@ -40,17 +47,27 @@ const saveError = atom<BkError | null>(null)
 
 let loadSeq = 0
 
-const workspaceId = (p: Project | null): string => p?.workspace?.id ?? ''
+export const workspaceId = (p: Project | null): string => p?.workspace?.id ?? ''
+
+export function getPref<K extends keyof WorkspacePrefs>(p: Project | null, key: K): WorkspacePrefs[K] {
+  return (workspaceId(p) ? read(prefs)[workspaceId(p)] : read(unsaved))?.[key]
+}
+
+/** Merges into the workspace's entry; never replaces it. */
+export function setPref<K extends keyof WorkspacePrefs>(key: K, value: WorkspacePrefs[K]): void {
+  const id = workspaceId(read(project))
+  if (!id) return set(unsaved, { ...read(unsaved), [key]: value })
+  set(prefs, { ...read(prefs), [id]: { ...read(prefs)[id], [key]: value } })
+}
 
 function currentFilter(p: Project | null): string {
-  const stored = workspaceId(p) ? read(prefs)[workspaceId(p)]?.pipeline : read(unsavedFilter)
+  const stored = getPref(p, 'pipeline')
   return stored && p?.pipelines.some((x) => keyOf(x) === stored) ? stored : ALL
 }
 
 function setFilter(value: string): void {
-  const id = workspaceId(read(project))
-  if (!id) return set(unsavedFilter, value)
-  set(prefs, { ...read(prefs), [id]: { ...read(prefs)[id], pipeline: value } })
+  setPref('pipeline', value)
+  notifySelection()
 }
 
 /** The pipelines whose builds the panel shows: the project's, narrowed by the pipeline filter. */
@@ -74,6 +91,7 @@ export function applyProject(next: Project): void {
   closePicker()
   set(visible, null)
   set(picked, [])
+  notifySelection()
   // With no match the picker is the body, so its list is needed right away.
   if (next.source === 'none' && next.workspace?.id) void loadVisible()
 }
@@ -84,12 +102,14 @@ export function resetProject(): void {
   set(loadError, null)
   closePicker()
   set(visible, null)
+  notifySelection()
 }
 
 export async function loadProject(): Promise<void> {
   const seq = ++loadSeq
   set(project, null)
   set(loadError, null)
+  notifySelection()
   try {
     const answer = await plugin.request('project.get')
     if (seq !== loadSeq) return
@@ -339,7 +359,7 @@ export function ProjectArea() {
   return (
     <Stack gap="sm">
       <Controls project={p} />
-      <Text muted>Your builds will appear here.</Text>
+      <BuildsArea project={p} />
     </Stack>
   )
 }

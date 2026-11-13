@@ -21,6 +21,7 @@ import {
   type PanelContext
 } from 'orca'
 import type { AuthState, BkError } from './protocol'
+import { RefreshControls, StaleBadge, startBuilds, UpdatedAt } from './builds-view'
 import { applyProject, loadProject, ProjectArea, resetProject } from './project-view'
 
 // None of these is persisted. The token only ever lives in the field's draft until submit.
@@ -69,6 +70,7 @@ async function signOut(): Promise<void> {
 }
 
 export function setup(ctx: PanelContext): void {
+  startBuilds(ctx)
   ctx.subscriptions.push(plugin.on('auth.changed', applyAuth))
   ctx.subscriptions.push(
     plugin.on('project.changed', (next) => {
@@ -180,15 +182,22 @@ function SignedIn({ name }: { name: string }) {
   return (
     <Stack gap="md">
       <Row justify="between">
-        <Heading level={2}>Buildkite</Heading>
-        <IconButton
-          icon="more"
-          label="Account"
-          onPress={() => set(menuOpen, !read(menuOpen))}
-        />
+        <Row gap="xs">
+          <Heading level={2}>Buildkite</Heading>
+          <StaleBadge />
+        </Row>
+        <Row gap="xs">
+          <RefreshControls />
+          <IconButton
+            icon="more"
+            label="Account"
+            onPress={() => set(menuOpen, !read(menuOpen))}
+          />
+        </Row>
       </Row>
       <Text muted size="xs">
         Signed in as <Text weight="semibold">{name}</Text>
+        <UpdatedAt />
       </Text>
       {read(menuOpen) ? (
         <Card>
