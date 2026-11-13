@@ -1,5 +1,5 @@
 // The builds list: fetches `builds.list` for the selected pipelines, keeps it fresh while the
-// panel is open, and draws every loading, empty and error state. Actions are T8's.
+// panel is open, and draws every loading, empty and error state, plus the row actions.
 import {
   atom,
   Badge,
@@ -32,7 +32,7 @@ import {
   setPref,
   workspaceId
 } from './project-view'
-import type { BkError, Build, Job, PipelineRef, Project } from './protocol'
+import type { BkError, Build, Job, PipelineRef, Project, Result } from './protocol'
 
 const POLL_MS = 15_000
 const DEFAULT_RETRY_SEC = 60
@@ -45,6 +45,15 @@ const loading = atom(false)
 // Wall clock in ms: ticks once a second, only while rate limited, to drive the countdown.
 const now = atom(0)
 const limitedUntil = atom(0)
+
+/** Set by the panel from `AuthState.canWriteBuilds`; the action buttons are hidden without it. */
+export const canWriteBuilds = atom(false)
+// Per build row: a pending confirmation, the running action, and the last note or error. The
+// confirm/running targets are 'rebuild' | 'cancel' | `unblock:<jobId>`.
+type RowState = { confirm?: string; running?: string; note?: string; error?: string }
+const rows = atom<Record<string, RowState>>({})
+const FINISHED = new Set(['passed', 'failed', 'canceled', 'skipped', 'not_run'])
+const ACTIVE = new Set(['running', 'scheduled', 'blocked'])
 
 let dataKey = ''
 let seq = 0
@@ -202,15 +211,162 @@ function BuildTimes({ b }: { b: Build }) {
   )
 }
 
-function JobRow({ job }: { job: Job }) {
+function rowState(b: Build): RowState {
+  return read(rows)[buildKey(b)] ?? {}
+}
+function patchRow(b: Build, next: RowState): void {
+  set(rows, { ...read(rows), [buildKey(b)]: next })
+}
+
+/** Runs one action on a row. Success refreshes the list; a failure stays on the row, never retried. */
+async function runAction(b: Build, target: string, call: () => Promise<Result<unknown>>): Promise<void> {
+  patchRow(b, { running: target })
+  try {
+    const answer = await call()
+    if (answer.ok) {
+      const note =
+        target === 'rebuild' && typeof (answer.value as { number?: unknown })?.number === 'number'
+          ? `Rebuild started as #${(answer.value as { number: number }).number} — it will appear on the next refresh.`
+          : undefined
+      patchRow(b, note ? { note } : {})
+      void refresh()
+    } else if (answer.error.kind === 'token_invalid') {
+      // auth.changed takes the panel back to sign-in.
+      patchRow(b, {})
+    } else patchRow(b, { error: answer.error.kind === 'network' ? "Can't reach Buildkite. Nothing was changed." : answer.error.message })
+  } catch {
+    patchRow(b, { error: "Can't reach Buildkite. Nothing was changed." })
+  }
+}
+
+const target = (b: Build) => ({ org: b.org, pipeline: b.pipelineSlug, number: b.number })
+const label = (b: Build) => `${b.org}/${b.pipelineSlug}`
+// Stale rows (a network failure over old data) can't be acted on.
+const actionsDisabled = (): boolean => {
+  const error = read(failure)
+  return error !== null && error.kind !== 'rate_limited' && read(builds) !== null
+}
+
+function Confirm({ title, body, yes, no, tone: t, onYes, onNo }: {
+  title: string
+  body: string
+  yes: string
+  no: string
+  tone: 'danger' | 'accent'
+  onYes: () => void
+  onNo: () => void
+}) {
   return (
-    <Row justify="between" gap="xs" wrap>
-      <Text truncate>{job.name}</Text>
-      <Row gap="xs">
-        <Badge tone={tone(job.state)}>{job.state}</Badge>
-        {/* T8: per-job action slot (Unblock / Unblock in Buildkite) */}
+    <Callout tone="warning" title={title}>
+      <Stack gap="xs">
+        <Text size="xs">{body}</Text>
+        <Row gap="xs">
+          <Button size="sm" variant="solid" tone={t} onPress={onYes}>
+            {yes}
+          </Button>
+          <Button size="sm" variant="ghost" onPress={onNo}>
+            {no}
+          </Button>
+        </Row>
+      </Stack>
+    </Callout>
+  )
+}
+
+function BuildActions({ b }: { b: Build }) {
+  if (!read(canWriteBuilds)) return null
+  const st = rowState(b)
+  const rebuild = FINISHED.has(b.state)
+  const cancel = ACTIVE.has(b.state)
+  const busy = st.running !== undefined || actionsDisabled()
+  return (
+    <Stack gap="xs">
+      {st.confirm === 'cancel' ? (
+        <Confirm
+          title={`Cancel build #${b.number} on ${label(b)}?`}
+          body="Running jobs will be stopped."
+          yes="Cancel build"
+          no="Keep running"
+          tone="danger"
+          onYes={() => void runAction(b, 'cancel', () => plugin.request('builds.cancel', target(b)))}
+          onNo={() => patchRow(b, {})}
+        />
+      ) : rebuild || cancel ? (
+        <Row gap="xs">
+          {rebuild ? (
+            <Button
+              size="sm"
+              icon="refresh"
+              disabled={busy}
+              onPress={() => void runAction(b, 'rebuild', () => plugin.request('builds.rebuild', target(b)))}
+            >
+              {st.running === 'rebuild' ? 'Rebuilding…' : 'Rebuild'}
+            </Button>
+          ) : (
+            <Button size="sm" tone="danger" disabled={busy} onPress={() => patchRow(b, { confirm: 'cancel' })}>
+              {st.running === 'cancel' ? 'Cancelling…' : 'Cancel'}
+            </Button>
+          )}
+          {st.running === 'rebuild' || st.running === 'cancel' ? <Spinner label="Working" labelHidden /> : null}
+        </Row>
+      ) : null}
+      {st.note ? (
+        <Text tone="success" size="xs">
+          {st.note}
+        </Text>
+      ) : null}
+      {st.error ? (
+        <Text tone="danger" size="xs">
+          {`⚠ ${st.error}`}
+        </Text>
+      ) : null}
+    </Stack>
+  )
+}
+
+function JobRow({ job, b }: { job: Job; b: Build }) {
+  const unblockable = read(canWriteBuilds) && job.unblockable && job.state === 'blocked'
+  const id = `unblock:${job.id}`
+  const st = rowState(b)
+  const busy = st.running !== undefined || actionsDisabled()
+  return (
+    <Stack gap="xs">
+      <Row justify="between" gap="xs" wrap>
+        <Text truncate>{job.name}</Text>
+        <Row gap="xs">
+          <Badge tone={tone(job.state)}>{job.state}</Badge>
+          {unblockable && job.hasFields ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon="open-external"
+              onPress={() => void host.call('shell.openExternal', { url: b.webUrl })}
+            >
+              Unblock in Buildkite
+            </Button>
+          ) : null}
+          {unblockable && !job.hasFields && st.confirm !== id ? (
+            <Button size="sm" tone="accent" disabled={busy} onPress={() => patchRow(b, { confirm: id })}>
+              {st.running === id ? 'Unblocking…' : 'Unblock'}
+            </Button>
+          ) : null}
+          {st.running === id ? <Spinner label="Working" labelHidden /> : null}
+        </Row>
       </Row>
-    </Row>
+      {unblockable && st.confirm === id ? (
+        <Confirm
+          title={`Unblock “${job.name}” on ${label(b)}?`}
+          body={`Build #${b.number} will continue past this step.`}
+          yes="Unblock"
+          no="Not now"
+          tone="accent"
+          onYes={() =>
+            void runAction(b, id, () => plugin.request('jobs.unblock', { ...target(b), jobId: job.id }))
+          }
+          onNo={() => patchRow(b, {})}
+        />
+      ) : null}
+    </Stack>
   )
 }
 
@@ -244,12 +400,12 @@ function BuildCard({ b }: { b: Build }) {
           {` · ${b.author} · `}
           <BuildTimes b={b} />
         </Text>
-        {/* T8: build action slot (Rebuild / Cancel and their confirmations) */}
+        <BuildActions b={b} />
         {b.jobs.length > 0 ? (
           <Collapsible title={`Jobs · ${b.jobs.length}`} open={expanded.includes(key)} onChange={toggle}>
             <Stack gap="xs">
               {b.jobs.map((j) => (
-                <JobRow key={j.id} job={j} />
+                <JobRow key={j.id} job={j} b={b} />
               ))}
             </Stack>
           </Collapsible>
@@ -405,4 +561,8 @@ export function UpdatedAt() {
 export function StaleBadge() {
   const error = read(failure)
   return read(builds) !== null && error && error.kind !== 'rate_limited' ? <Badge tone="warning">Stale</Badge> : null
+}
+
+export function ReadOnlyBadge() {
+  return read(canWriteBuilds) ? null : <Badge tone="neutral">Read-only</Badge>
 }
