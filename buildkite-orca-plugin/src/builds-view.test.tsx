@@ -190,9 +190,11 @@ test('polls every 15 s while open, and not after the panel closes (AC17)', async
     await view.settled()
     assert.equal(s.inputs.length, 2)
     await view.setVisible(true)
+    await view.settled()
+    assert.equal(s.inputs.length, 3, 'refreshes once when visible again')
     await view.unmount()
     mock.timers.tick(60_000)
-    assert.equal(s.inputs.length, 2)
+    assert.equal(s.inputs.length, 3)
   } finally {
     mock.timers.reset()
   }
@@ -310,5 +312,82 @@ test('no request without a project, with no pipelines, or when signed out (AC1)'
   const s = setup(() => proj({ source: 'none', pipelines: [] }), () => ok([]))
   const view = await mount(panel, { host: s.host })
   assert.equal(s.inputs.length, 0)
+  await view.unmount()
+})
+
+test('a rate limit survives a selection change: countdown kept, request deferred until it ends (AC18)', async () => {
+  mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  try {
+    const s = setup(
+      () => proj({ pipelines: [web, api] }),
+      (_i, n) => (n === 2 ? fail({ kind: 'rate_limited', message: 'x', retryAfterSec: 3 }) : ok([build(n)]))
+    )
+    const view = await mount(panel, { host: s.host })
+    await view.press({ label: 'Refresh' })
+    assert.ok(has(view, 'Rate limited, retrying in 3s'))
+    await view.toggle({ label: 'This branch only' })
+    await view.select({ label: 'Pipeline' }, 'acme/api')
+    await view.post('project.changed', proj({ workspace: ws('main', 'ws-2'), pipelines: [web, api] }))
+    assert.equal(s.inputs.length, 2, 'no request during the limit')
+    assert.ok(has(view, 'Rate limited, retrying in 3s') && !has(view, '#1'))
+    mock.timers.tick(3000)
+    await view.settled()
+    assert.equal(s.inputs.length, 3)
+    assert.ok(!has(view, 'Rate limited') && has(view, '#3'))
+    await view.unmount()
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('selection changes while the panel is hidden make no request until it is visible again (AC17)', async () => {
+  const s = setup(() => proj(), (_i, n) => ok([build(n)]))
+  const view = await mount(panel, { host: s.host })
+  await view.setVisible(false)
+  await view.post('project.changed', proj({ workspace: ws('main', 'ws-2') }))
+  await view.settled()
+  assert.equal(s.inputs.length, 1)
+  await view.setVisible(true)
+  await view.settled()
+  assert.equal(s.inputs.length, 2)
+  assert.ok(has(view, '#2'))
+  await view.unmount()
+})
+
+test('Retry after a failed first load shows the loading state while in flight (AC23)', async () => {
+  let release: (a: Answer) => void = () => {}
+  const gate = new Promise<Answer>((r) => (release = r))
+  const s = setup(() => proj(), (_i, n) => (n === 1 ? fail({ kind: 'network', message: 'x' }) : gate) as Answer)
+  const view = await mount(panel, { host: s.host })
+  assert.ok(!has(view, 'Loading builds'))
+  const pressing = view.press({ text: 'Retry' })
+  await new Promise((r) => setTimeout(r, 20))
+  assert.ok(has(view, 'Loading builds'))
+  release(ok([build(1)]))
+  await pressing
+  assert.ok(!has(view, 'Loading builds') && has(view, '#1'))
+  await view.unmount()
+})
+
+test('a stale response from the previous workspace is discarded (AC26)', async () => {
+  const release: Array<(a: Answer) => void> = []
+  let n = 0
+  const host = mockHost({
+    requests: {
+      'auth.status': () => signedIn,
+      'project.get': () => ({ ok: true, value: proj() }),
+      'builds.list': () => (++n === 1 ? ok([build(1)]) : new Promise<Answer>((r) => release.push(r)))
+    } as never
+  })
+  const view = await mount(panel, { host })
+  const refreshing = view.press({ label: 'Refresh' })
+  await new Promise((r) => setTimeout(r, 20))
+  const switching = view.post('project.changed', proj({ workspace: ws('main', 'ws-2') }))
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal(release.length, 2)
+  release[1](ok([build(7)]))
+  release[0](ok([build(1, { message: 'old workspace' })]))
+  await Promise.all([switching, refreshing])
+  assert.ok(has(view, '#7') && !has(view, 'old workspace'))
   await view.unmount()
 })

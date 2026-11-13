@@ -21,7 +21,8 @@ import {
   Stack,
   Switch,
   Text,
-  type PanelContext
+  type PanelContext,
+  type ReadonlyAtom
 } from 'orca'
 import {
   getPref,
@@ -47,6 +48,9 @@ const limitedUntil = atom(0)
 
 let dataKey = ''
 let seq = 0
+let visibleAtom: ReadonlyAtom<boolean> | null = null
+let wasVisible = true
+const isVisible = (): boolean => visibleAtom === null || read(visibleAtom)
 let countdown: ReturnType<typeof setInterval> | undefined
 
 const keyOf = (p: PipelineRef): string => `${p.org}/${p.slug}`
@@ -70,6 +74,7 @@ function startCountdown(seconds: number): void {
     set(now, Date.now())
     if (Date.now() >= read(limitedUntil)) {
       stopCountdown()
+      if (read(failure)?.kind === 'rate_limited') set(failure, null)
       void refresh()
     }
   }, 1000)
@@ -78,10 +83,10 @@ function startCountdown(seconds: number): void {
 function clearData(): void {
   seq++
   dataKey = ''
-  stopCountdown()
+  // The rate limit is account-wide: it outlives a changed selection, so its notice stays.
   set(builds, null)
   set(fetchedAt, null)
-  set(failure, null)
+  if (read(failure)?.kind !== 'rate_limited') set(failure, null)
   set(loading, false)
 }
 
@@ -96,7 +101,9 @@ export async function refresh(): Promise<void> {
   if (key !== dataKey) {
     clearData()
     dataKey = key
-  } else if (read(limitedUntil) > Date.now() || read(loading)) return
+  } else if (read(loading)) return
+  // Nothing is requested while hidden or rate limited; becoming visible / the countdown ending refreshes.
+  if (!isVisible() || read(limitedUntil) > Date.now()) return
   const mine = ++seq
   set(loading, true)
   try {
@@ -126,6 +133,8 @@ export function startBuilds(ctx: PanelContext): void {
   dataKey = ''
   seq++
   countdown = undefined
+  visibleAtom = ctx.visible
+  wasVisible = true
   const poll = setInterval(() => {
     if (read(ctx.visible) && read(limitedUntil) <= Date.now()) void refresh()
   }, POLL_MS)
@@ -138,8 +147,17 @@ export function startBuilds(ctx: PanelContext): void {
       if (countdown !== undefined) clearInterval(countdown)
       countdown = undefined
       seq++
+      visibleAtom = null
     }
   })
+}
+
+/** Renders nothing; refreshes once each time the panel becomes visible again. */
+function VisibilityWatch() {
+  const visible = isVisible()
+  if (visible && !wasVisible) queueMicrotask(() => void refresh())
+  wasVisible = visible
+  return null
 }
 
 const TONES: Record<string, 'accent' | 'warning' | 'success' | 'danger' | 'neutral'> = {
@@ -247,6 +265,7 @@ const copy = (error: BkError): string =>
 function Banner() {
   const error = read(failure)
   if (!error) return null
+  if (error.kind !== 'rate_limited' && read(loading) && read(builds) === null) return null
   if (error.kind === 'rate_limited') {
     const left = Math.max(0, Math.ceil((read(limitedUntil) - read(now)) / 1000))
     return (
@@ -322,7 +341,7 @@ export function BuildsArea({ project: p }: { project: Project }) {
   let body
   if (list === null) {
     body =
-      error === null || error.kind === 'token_invalid' ? (
+      error === null || error.kind === 'token_invalid' || read(loading) ? (
         <Stack gap="sm">
           {[0, 1, 2, 3].map((i) => (
             <Card key={i}>
@@ -344,6 +363,7 @@ export function BuildsArea({ project: p }: { project: Project }) {
   }
   return (
     <Stack gap="sm">
+      <VisibilityWatch />
       <BranchToggle p={p} />
       <Banner />
       {body}
