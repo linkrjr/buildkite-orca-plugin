@@ -1,23 +1,23 @@
 # Graph Report - orca-plugin  (2026-11-18)
 
 ## Corpus Check
-- 39 files · ~123,729 words
+- 39 files · ~137,321 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 4 file(s) not represented in the graph (top: (none) 4)
 
 ## Summary
-- 363 nodes · 746 edges · 16 communities (14 shown, 2 thin omitted)
+- 364 nodes · 747 edges · 17 communities (16 shown, 1 thin omitted)
 - Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 20 edges (avg confidence: 0.84)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `d33db582`
+- Built from commit: `157b70b3`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - Orca Plugin Runtime APIs
-- protocol.ts
+- builds.ts
 - build-actions.test.tsx
 - leak.test.ts
 - panel.test.tsx
@@ -25,6 +25,7 @@
 - project-view.tsx
 - TypeScript Config
 - generate-emoji-data.ts
+- protocol.ts
 - project-view.test.tsx
 - builds-view.tsx
 - registerProject
@@ -65,27 +66,31 @@
 - **Secure Buildkite token lifecycle** — docs_specs_buildkite_builds_panel_tokenhandling, docs_specs_buildkite_builds_panel_secret_storage, docs_specs_buildkite_builds_panel_token_sign_in, docs_specs_buildkite_builds_panel_token_leak_test, docs_specs_buildkite_builds_panel_buildkite_api [EXTRACTED 1.00]
 - **Per-workspace build view configuration** — docs_specs_buildkite_builds_panel_remote_matching, docs_specs_buildkite_builds_panel_pipeline_picker, docs_specs_buildkite_builds_panel_pipeline_filter, docs_specs_buildkite_builds_panel_branch_toggle, docs_specs_buildkite_builds_panel_per_workspace_preferences, docs_specs_buildkite_builds_panel_workspace_switching [INFERRED 0.85]
 
-## Communities (16 total, 2 thin omitted)
+## Communities (17 total, 1 thin omitted)
 
 ### Community 0 - "Orca Plugin Runtime APIs"
 Cohesion: 0.07
 Nodes (34): Buildkite Plugin README, Counter demo (counter.add request), orca.panels.handle, orca.panels.post, orca plugin check scenarios (src/panel.check.ts), orca plugin dev watch, orca plugin test (orca/testing), orca.storage (+26 more)
 
-### Community 1 - "protocol.ts"
-Cohesion: 0.07
-Nodes (46): buildPath(), fail(), invalid(), registerActions(), SLUG, Target, Auth, SignedIn (+38 more)
+### Community 1 - "builds.ts"
+Cohesion: 0.13
+Nodes (20): SLUG, BlockJobRef, blockStepHasFields(), ACTIVE, createBuilds(), forPipeline(), list(), pickError() (+12 more)
 
 ### Community 2 - "build-actions.test.tsx"
 Cohesion: 0.18
-Nodes (7): auth(), build(), forbidden, project, running(), setup(), web
+Nodes (8): auth(), build(), forbidden, project, running(), setup(), web, BkError
 
 ### Community 3 - "leak.test.ts"
-Cohesion: 0.06
-Nodes (38): blockedJob, PROFILE, setup(), target, createAuth(), request(), signIn(), signOut() (+30 more)
+Cohesion: 0.05
+Nodes (53): buildPath(), fail(), invalid(), registerActions(), Target, blockedJob, PROFILE, setup() (+45 more)
+
+### Community 4 - "panel.test.tsx"
+Cohesion: 0.22
+Nodes (3): signedOut, AuthState, Result
 
 ### Community 5 - "panel.tsx"
 Cohesion: 0.16
-Nodes (22): canWriteBuilds, ReadOnlyBadge(), StaleBadge(), startBuilds(), UpdatedAt(), applyAuth(), auth, draft (+14 more)
+Nodes (23): canWriteBuilds, ReadOnlyBadge(), RefreshControls(), StaleBadge(), startBuilds(), UpdatedAt(), applyAuth(), auth (+15 more)
 
 ### Community 6 - "project-view.tsx"
 Cohesion: 0.12
@@ -99,25 +104,29 @@ Nodes (3): extends, include, ./.orca/types/tsconfig.json
 Cohesion: 0.13
 Nodes (10): buildkite, Entry, files, pluginDir, [source, flag], unicode, BUILDKITE_EMOJI, UNICODE_EMOJI (+2 more)
 
+### Community 9 - "protocol.ts"
+Cohesion: 0.25
+Nodes (7): BkErrorKind, Build, BuildTarget, orca, PluginPanelEvents, PluginRequests, Project
+
 ### Community 11 - "project-view.test.tsx"
-Cohesion: 0.18
-Nodes (8): api, ops, proj(), signedIn, web, ws(), Pipeline, Project
+Cohesion: 0.20
+Nodes (7): api, ops, proj(), signedIn, web, ws(), Pipeline
 
 ### Community 13 - "builds-view.tsx"
 Cohesion: 0.10
-Nodes (45): actionsDisabled(), ACTIVE, Banner(), BranchToggle(), BuildActions(), BuildCard(), buildKey(), builds (+37 more)
+Nodes (44): actionsDisabled(), ACTIVE, Banner(), BranchToggle(), BuildActions(), BuildCard(), buildKey(), builds (+36 more)
 
 ### Community 14 - "registerProject"
-Cohesion: 0.19
-Nodes (17): choiceKey(), refKey(), registerProject(), activeWorkspace(), getAll(), listVisiblePipelines(), projectFor(), toWorkspace() (+9 more)
+Cohesion: 0.16
+Nodes (21): choiceKey(), Deps, Listed, refKey(), registerProject(), activeWorkspace(), getAll(), listVisiblePipelines() (+13 more)
 
 ### Community 16 - "builds-view.test.tsx"
-Cohesion: 0.17
+Cohesion: 0.15
 Nodes (6): Answer, api, proj(), signedIn, web, ws()
 
 ### Community 17 - "panel.check.ts"
-Cohesion: 0.17
-Nodes (8): all, listing(), readOnlyState, sample, signedInState, withProject(), workspace, BkError
+Cohesion: 0.18
+Nodes (7): all, listing(), readOnlyState, sample, signedInState, withProject(), workspace
 
 ### Community 21 - "node-test.d.ts"
 Cohesion: 0.29
@@ -129,13 +138,13 @@ Nodes (3): node:fs, node:test, node:url
 
 ## Knowledge Gaps
 - **12 isolated node(s):** `./.orca/types/tsconfig.json`, `mock`, `orca.panels.handle`, `orca plugin dev watch`, `plugin.request` (+7 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 146 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **2 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 147 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **1 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Result` connect `protocol.ts` to `build-actions.test.tsx`, `leak.test.ts`, `panel.test.tsx`, `project-view.test.tsx`, `builds-view.tsx`, `builds-view.test.tsx`, `panel.check.ts`?**
+- **Why does `Result` connect `panel.test.tsx` to `builds.ts`, `build-actions.test.tsx`, `leak.test.ts`, `protocol.ts`, `project-view.test.tsx`, `builds-view.tsx`, `registerProject`, `builds-view.test.tsx`, `panel.check.ts`?**
   _High betweenness centrality (0.047) - this node is a cross-community bridge._
 - **Are the 3 inferred relationships involving `createAuth()` (e.g. with `request()` and `signIn()`) actually correct?**
   _`createAuth()` has 3 INFERRED edges - model-reasoned connections that need verification._
@@ -143,10 +152,10 @@ _Questions this graph is uniquely positioned to answer:_
   _12 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Orca Plugin Runtime APIs` be split into smaller, more focused modules?**
   _Cohesion score 0.07112375533428165 - nodes in this community are weakly interconnected._
-- **Why does `registerProject()` connect `registerProject` to `protocol.ts`, `leak.test.ts`?**
+- **Why does `registerProject()` connect `registerProject` to `leak.test.ts`?**
   _High betweenness centrality (0.033) - this node is a cross-community bridge._
-- **Should `protocol.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.06612021857923497 - nodes in this community are weakly interconnected._
+- **Should `builds.ts` be split into smaller, more focused modules?**
+  _Cohesion score 0.13043478260869565 - nodes in this community are weakly interconnected._
 
 ### Low-confidence Hints
 _AMBIGUOUS edges — the extractor was unsure. Verify before acting on these._
