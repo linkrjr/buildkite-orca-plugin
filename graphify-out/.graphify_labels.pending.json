@@ -1,0 +1,23 @@
+{
+  "1": "builds.ts",
+  "2": "Intent: Worker: builds listing, ordering and rate limits",
+  "3": "leak.test.ts",
+  "4": "Intent: Panel: rebuild, cancel and unblock controls",
+  "5": "Intent: Panel: builds list, jobs, branch toggle and refresh states",
+  "6": "project-view.tsx",
+  "8": "Intent: Panel: project pipelines, picker and pipeline filter",
+  "9": "Intent: Panel: sign-in, account header and counter removal",
+  "10": "Intent: Worker: rebuild, cancel and unblock actions",
+  "11": "project-view.test.tsx",
+  "12": "Intent: Worker: workspace project and pipeline matching",
+  "13": "builds-view.tsx",
+  "14": "registerProject",
+  "15": "Intent: Worker: token sign-in, storage, Buildkite client and leak harness",
+  "16": "builds-view.test.tsx",
+  "17": "panel.check.ts",
+  "18": "protocol.ts",
+  "19": "panel.test.tsx",
+  "20": "Result",
+  "21": "node-test.d.ts",
+  "22": "mock"
+}
