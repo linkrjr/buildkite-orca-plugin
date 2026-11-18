@@ -11,6 +11,7 @@ import {
   EmptyState,
   host,
   IconButton,
+  Image,
   plugin,
   read,
   RelativeTime,
@@ -24,6 +25,7 @@ import {
   type PanelContext,
   type ReadonlyAtom
 } from 'orca'
+import { jobLabel } from './emoji'
 import {
   getPref,
   project,
@@ -405,10 +407,16 @@ function JobRow({ job, b }: { job: Job; b: Build }) {
   const id = `unblock:${job.id}`
   const st = rowState(b)
   const busy = st.running !== undefined || actionsDisabled()
+  const { icons, text } = jobLabel(job.name)
   return (
     <Stack gap="xs">
       <Row justify="between" gap="xs" wrap>
-        <Text truncate>{job.name}</Text>
+        <Row gap="xs">
+          {icons.map((icon, i) => (
+            <Image key={i} src={icon.src} alt={icon.name} size="xs" />
+          ))}
+          {text !== '' ? <Text truncate>{text}</Text> : null}
+        </Row>
         <Row gap="xs">
           <Badge tone={tone(job.state)}>{job.state}</Badge>
           {unblockable && job.hasFields ? (
@@ -432,7 +440,7 @@ function JobRow({ job, b }: { job: Job; b: Build }) {
       </Row>
       {unblockable && st.confirm === id ? (
         <Confirm
-          title={`Unblock “${job.name}” on ${label(b)}?`}
+          title={`Unblock “${text || 'this step'}” on ${label(b)}?`}
           body={`Build #${b.number} will continue past this step.`}
           yes="Unblock"
           no="Not now"
