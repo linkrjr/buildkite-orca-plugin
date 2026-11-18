@@ -4,6 +4,7 @@
   "name": "Buildkite",
   "version": "1.0.1",
   "description": "Buildkite builds for the active workspace, in a sidebar panel.",
+  "license": "MIT",
   "engines": {
     "orca": ">=1.4.248"
   },
