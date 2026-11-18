@@ -8,3 +8,11 @@ declare module 'node:test' {
     }
   }
 }
+
+// emoji.test.ts checks that every bundled emoji file exists.
+declare module 'node:fs' {
+  export function existsSync(path: string): boolean
+}
+declare module 'node:url' {
+  export function fileURLToPath(url: URL): string
+}

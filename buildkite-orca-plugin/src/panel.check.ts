@@ -103,6 +103,23 @@ export default defineCheck({
     },
     storage: { 'panel.prefs': { 'ws-1': { expanded: ['acme/web#4827'] } } }
   },
+  // Expanded jobs whose names carry shortcodes: Buildkite emoji render as bundled images, standard
+  // ones as Unicode, unknown ones vanish.
+  jobsWithIcons: {
+    ...listing(
+      () =>
+        okBuilds([
+          build(4827, {
+            jobs: [
+              { id: 'j1', type: 'script', name: ':pipeline: Upload :nope_not_real:', state: 'passed', unblockable: false, hasFields: false },
+              { id: 'j2', type: 'script', name: ':docker: Build :rocket:', state: 'passed', unblockable: false, hasFields: false }
+            ]
+          })
+        ]),
+      { workspace, source: 'auto', pipelines: [all[0]] }
+    ),
+    storage: { 'panel.prefs': { 'ws-1': { expanded: ['acme/web#4827'] } } }
+  },
   noBuilds: listing(() => okBuilds([]), { workspace, source: 'auto', pipelines: [all[0]] }),
   networkError: listing(() => failed({ kind: 'network', message: "Can't reach Buildkite" }), {
     workspace,

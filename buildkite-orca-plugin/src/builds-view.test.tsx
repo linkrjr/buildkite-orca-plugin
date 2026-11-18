@@ -121,6 +121,35 @@ test('expanding a build lists its jobs, and expansion survives a refresh and is 
   await view.unmount()
 })
 
+test('job names show Buildkite emoji as images, standard emoji as Unicode and never a raw shortcode (job icons)', async () => {
+  const jobs = [
+    { id: 'j1', type: 'script' as const, name: ':pipeline: Upload :nope_not_real:', state: 'passed', unblockable: false, hasFields: false },
+    { id: 'j2', type: 'script' as const, name: ':rocket: Deploy', state: 'passed', unblockable: false, hasFields: false }
+  ]
+  const s = setup(() => proj(), () => ok([build(1, { jobs })]))
+  const view = await mount(panel, { host: s.host })
+  await view.toggle({ text: /Jobs · 2/ })
+  assert.ok(has(view, 'assets/emoji/pipeline.png'))
+  assert.ok(view.find({ text: 'Upload' }))
+  assert.ok(view.find({ text: '🚀 Deploy' }))
+  assert.ok(!has(view, ':pipeline:') && !has(view, ':nope_not_real:') && !has(view, ':rocket:'))
+  await view.unmount()
+})
+
+test('a long job name truncates inside a shrinkable box, and the state badge keeps its size (job icons)', async () => {
+  const name = ':docker: ' + 'bundle exec rake db:migrate:reset '.repeat(8)
+  const jobs = [{ id: 'j1', type: 'script' as const, name, state: 'passed', unblockable: false, hasFields: false }]
+  const s = setup(() => proj(), () => ok([build(1, { jobs })]))
+  const view = await mount(panel, { host: s.host })
+  await view.toggle({ text: /Jobs · 1/ })
+  const text = view.find({ text: /^bundle exec rake/ })
+  assert.equal(text?.props.truncate, true)
+  const badge = JSON.stringify(view.tree()).match(/"shrink":false[^]*?"passed"/)
+  assert.ok(badge, 'the badge sits in a box that keeps its size')
+  assert.ok(JSON.stringify(view.tree()).includes('"minWidth":0'), 'the name box can shrink below its content')
+  await view.unmount()
+})
+
 test('branch toggle: requests the branch, is remembered per workspace and merges into the prefs entry (AC14)', async () => {
   const s = setup(() => proj(), () => ok([build(1)]))
   const view = await mount(panel, { host: s.host })

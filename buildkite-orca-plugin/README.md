@@ -39,3 +39,7 @@ orca plugin dev watch .    # loads this folder into Orca and prints its logs and
 Orca names the publisher after where the plugin is installed from: the GitHub or GitLab owner of
 its repository, or `local` for a folder. See
 https://github.com/stablyai/orca/blob/main/docs/reference/plugin-authoring.md.
+
+## Emoji credits
+
+Job names in the panel show Buildkite's emoji (`:pipeline:`, `:docker:`) as images from `assets/emoji/`, a copy of the `img-buildkite-64` set from [buildkite/emojis](https://github.com/buildkite/emojis). The repository has no licence file; each logo is owned by its respective creator. Standard shortcodes (`:rocket:`) show as Unicode emoji, and unknown ones are left out. Orca's `Image` shows only PNG, JPEG and WebP, so the few GIF-only shortcodes (such as `:partyparrot:`) are treated as unknown and left out. `src/emoji-data.ts` and `assets/emoji/` are generated from that repository's `img-buildkite-64.json` and `img-apple-64.json`: clone it, then run `bun scripts/generate-emoji-data.ts <clone> --sync-assets` from this folder.

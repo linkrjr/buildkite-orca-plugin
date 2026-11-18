@@ -34,10 +34,10 @@ const build = (n: number, over: Partial<Build> = {}): Build => ({
   ...over
 })
 const running = (n: number) => build(n, { state: 'running', finishedAt: null })
-const blockedJob = (hasFields: boolean) => ({
+const blockedJob = (hasFields: boolean, name = 'Deploy to production') => ({
   id: 'job-1',
   type: 'manual' as const,
-  name: 'Deploy to production',
+  name,
   state: 'blocked',
   unblockable: true,
   hasFields
@@ -190,6 +190,16 @@ test('a blocked step without fields: Unblock asks first, then unblocks and refre
   await view.press({ text: 'Unblock' })
   assert.deepEqual(calls, [{ org: 'acme', pipeline: 'web', number: 4, jobId: 'job-1' }])
   assert.equal(s.lists.length, 2)
+  await view.unmount()
+})
+
+test('the Unblock confirmation names the step as "this step" when its name is only unknown shortcodes (job icons)', async () => {
+  const s = setup(() => [build(4, { state: 'blocked', finishedAt: null, jobs: [blockedJob(false, ':nope_not_real:')] })], {})
+  const view = await mount(panel, { host: s.host })
+  await view.toggle({ text: /Jobs · 1/ })
+  await view.press({ text: 'Unblock' })
+  assert.ok(has(view, 'Unblock “this step” on acme/web?'))
+  assert.ok(!has(view, ':nope_not_real:'))
   await view.unmount()
 })
 
