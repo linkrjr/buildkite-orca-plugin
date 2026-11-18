@@ -1,10 +1,2 @@
-tmp/team/
-
-# Graphify local state & noisy diffs
-graphify-out/cost.json
-graphify-out/manifest.json
-graphify-out/cache/
-graphify-out/graph.html
-
-# Claude Intents
-intent/
+node_modules/
+.orca/
