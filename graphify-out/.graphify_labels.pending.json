@@ -1,10 +1,11 @@
 {
-  "1": "builds.ts",
+  "1": "protocol.ts",
   "2": "build-actions.test.tsx",
   "3": "leak.test.ts",
   "4": "panel.test.tsx",
-  "5": "protocol.ts",
+  "5": "panel.tsx",
   "6": "project-view.tsx",
+  "8": "generate-emoji-data.ts",
   "11": "project-view.test.tsx",
   "13": "builds-view.tsx",
   "14": "registerProject",
