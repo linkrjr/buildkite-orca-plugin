@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "buildkite-orca-plugin",
   "name": "Buildkite",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Buildkite builds for the active workspace, in a sidebar panel.",
   "license": "MIT",
   "engines": {
