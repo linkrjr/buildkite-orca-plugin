@@ -50,13 +50,15 @@ const limitedUntil = atom(0)
 export const canWriteBuilds = atom(false)
 // Per build row: a pending confirmation, the running action, and the last note or error. The
 // confirm/running targets are 'rebuild' | 'cancel' | `unblock:<jobId>`.
-type RowState = { confirm?: string; running?: string; note?: string; error?: string }
+// `rebuilt` is the key of the build a Rebuild started, so its note ends once that build is listed.
+type RowState = { confirm?: string; running?: string; note?: string; rebuilt?: string; error?: string }
 const rows = atom<Record<string, RowState>>({})
 const FINISHED = new Set(['passed', 'failed', 'canceled', 'skipped', 'not_run'])
 const ACTIVE = new Set(['running', 'scheduled', 'blocked'])
 
 let dataKey = ''
 let seq = 0
+let inflight: Promise<void> | null = null
 let visibleAtom: ReadonlyAtom<boolean> | null = null
 let wasVisible = true
 const isVisible = (): boolean => visibleAtom === null || read(visibleAtom)
@@ -99,6 +101,34 @@ function clearData(): void {
   set(loading, false)
 }
 
+/** After an action: waits for a poll already in flight (it may predate the action), then loads again. */
+async function refreshFresh(): Promise<void> {
+  if (inflight) await inflight.catch(() => undefined)
+  await refresh()
+}
+
+/**
+ * Drops a row's confirmation, note and error once a refresh changed that build's state (or
+ * removed it), and a rebuild note once the new build is listed. A running action is kept.
+ */
+function reconcileRows(prev: Build[] | null, next: Build[]): void {
+  const current = read(rows)
+  const before = new Map((prev ?? []).map((b) => [buildKey(b), b.state]))
+  const after = new Map(next.map((b) => [buildKey(b), b.state]))
+  const out: Record<string, RowState> = {}
+  for (const [key, st] of Object.entries(current)) {
+    if (st.running !== undefined) {
+      out[key] = st
+      continue
+    }
+    const now = after.get(key)
+    if (now === undefined) continue
+    if (before.get(key) !== now) continue
+    out[key] = st.rebuilt !== undefined && after.has(st.rebuilt) ? { ...st, note: undefined, rebuilt: undefined } : st
+  }
+  set(rows, out)
+}
+
 /** Loads the list for the current selection. A changed selection clears what was shown first. */
 export async function refresh(): Promise<void> {
   const p = read(project)
@@ -113,12 +143,23 @@ export async function refresh(): Promise<void> {
   } else if (read(loading)) return
   // Nothing is requested while hidden or rate limited; becoming visible / the countdown ending refreshes.
   if (!isVisible() || read(limitedUntil) > Date.now()) return
+  const run = load(refs, branch)
+  inflight = run
+  try {
+    await run
+  } finally {
+    if (inflight === run) inflight = null
+  }
+}
+
+async function load(refs: PipelineRef[], branch: string | undefined): Promise<void> {
   const mine = ++seq
   set(loading, true)
   try {
     const answer = await plugin.request('builds.list', branch ? { pipelines: refs, branch } : { pipelines: refs })
     if (mine !== seq) return
     if (answer.ok) {
+      reconcileRows(read(builds), answer.value.builds)
       set(builds, answer.value.builds)
       set(fetchedAt, answer.value.fetchedAt)
       set(failure, null)
@@ -220,20 +261,38 @@ function patchRow(b: Build, next: RowState): void {
 
 /** Runs one action on a row. Success refreshes the list; a failure stays on the row, never retried. */
 async function runAction(b: Build, target: string, call: () => Promise<Result<unknown>>): Promise<void> {
+  // A second press delivered before the host re-renders the disabled button must not repeat it.
+  if (rowState(b).running !== undefined) return
   patchRow(b, { running: target })
   try {
     const answer = await call()
     if (answer.ok) {
-      const note =
-        target === 'rebuild' && typeof (answer.value as { number?: unknown })?.number === 'number'
-          ? `Rebuild started as #${(answer.value as { number: number }).number} — it will appear on the next refresh.`
-          : undefined
-      patchRow(b, note ? { note } : {})
-      void refresh()
+      // The row stays busy until the refreshed list is in, so it never shows its old state as actionable.
+      await refreshFresh()
+      const started = target === 'rebuild' ? (answer.value as { number?: unknown } | null)?.number : undefined
+      const listed = typeof started === 'number' && (read(builds) ?? []).some((x) => buildKey(x) === `${b.org}/${b.pipelineSlug}#${started}`)
+      patchRow(
+        b,
+        typeof started === 'number' && !listed
+          ? {
+              note: `Rebuild started as #${started} — it will appear on the next refresh.`,
+              rebuilt: `${b.org}/${b.pipelineSlug}#${started}`
+            }
+          : {}
+      )
     } else if (answer.error.kind === 'token_invalid') {
       // auth.changed takes the panel back to sign-in.
       patchRow(b, {})
-    } else patchRow(b, { error: answer.error.kind === 'network' ? "Can't reach Buildkite. Nothing was changed." : answer.error.message })
+    } else {
+      patchRow(b, {
+        error:
+          answer.error.kind === 'network'
+            ? "Can't reach Buildkite. Nothing was changed."
+            : answer.error.kind === 'forbidden'
+              ? `You don't have permission to do this on ${label(b)}`
+              : answer.error.message
+      })
+    }
   } catch {
     patchRow(b, { error: "Can't reach Buildkite. Nothing was changed." })
   }
@@ -241,18 +300,34 @@ async function runAction(b: Build, target: string, call: () => Promise<Result<un
 
 const target = (b: Build) => ({ org: b.org, pipeline: b.pipelineSlug, number: b.number })
 const label = (b: Build) => `${b.org}/${b.pipelineSlug}`
+
+/** The build's page, only if it is an https buildkite.com URL; anything else is never opened. */
+function buildUrl(b: Build): string | null {
+  try {
+    const u = new URL(b.webUrl)
+    return u.protocol === 'https:' && (u.hostname === 'buildkite.com' || u.hostname.endsWith('.buildkite.com')) ? u.href : null
+  } catch {
+    return null
+  }
+}
+/** Opens the build in the browser; Orca's refusal (e.g. the user declines a new host) is dropped. */
+function openBuild(b: Build): void {
+  const url = buildUrl(b)
+  if (url) host.call('shell.openExternal', { url }).catch(() => undefined)
+}
 // Stale rows (a network failure over old data) can't be acted on.
 const actionsDisabled = (): boolean => {
   const error = read(failure)
   return error !== null && error.kind !== 'rate_limited' && read(builds) !== null
 }
 
-function Confirm({ title, body, yes, no, tone: t, onYes, onNo }: {
+function Confirm({ title, body, yes, no, tone: t, disabled, onYes, onNo }: {
   title: string
   body: string
   yes: string
   no: string
   tone: 'danger' | 'accent'
+  disabled: boolean
   onYes: () => void
   onNo: () => void
 }) {
@@ -261,7 +336,7 @@ function Confirm({ title, body, yes, no, tone: t, onYes, onNo }: {
       <Stack gap="xs">
         <Text size="xs">{body}</Text>
         <Row gap="xs">
-          <Button size="sm" variant="solid" tone={t} onPress={onYes}>
+          <Button size="sm" variant="solid" tone={t} disabled={disabled} onPress={onYes}>
             {yes}
           </Button>
           <Button size="sm" variant="ghost" onPress={onNo}>
@@ -288,6 +363,7 @@ function BuildActions({ b }: { b: Build }) {
           yes="Cancel build"
           no="Keep running"
           tone="danger"
+          disabled={busy}
           onYes={() => void runAction(b, 'cancel', () => plugin.request('builds.cancel', target(b)))}
           onNo={() => patchRow(b, {})}
         />
@@ -340,7 +416,8 @@ function JobRow({ job, b }: { job: Job; b: Build }) {
               size="sm"
               variant="ghost"
               icon="open-external"
-              onPress={() => void host.call('shell.openExternal', { url: b.webUrl })}
+              disabled={buildUrl(b) === null}
+              onPress={() => openBuild(b)}
             >
               Unblock in Buildkite
             </Button>
@@ -360,6 +437,7 @@ function JobRow({ job, b }: { job: Job; b: Build }) {
           yes="Unblock"
           no="Not now"
           tone="accent"
+          disabled={busy}
           onYes={() =>
             void runAction(b, id, () => plugin.request('jobs.unblock', { ...target(b), jobId: job.id }))
           }
@@ -389,7 +467,8 @@ function BuildCard({ b }: { b: Build }) {
             icon="open-external"
             label={`Open build #${b.number} in Buildkite`}
             size="sm"
-            onPress={() => void host.call('shell.openExternal', { url: b.webUrl })}
+            disabled={buildUrl(b) === null}
+            onPress={() => openBuild(b)}
           />
         </Row>
         <Text weight="medium" truncate>

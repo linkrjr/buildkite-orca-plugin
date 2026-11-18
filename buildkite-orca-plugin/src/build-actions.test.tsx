@@ -1,4 +1,5 @@
-import { assert, mockHost, mount, test } from 'orca/testing'
+import { mock } from 'node:test'
+import { assert, hostError, mockHost, mount, test } from 'orca/testing'
 import type { AuthState, BkError, Build, Pipeline, Project, Result } from './protocol'
 import * as panel from './panel'
 
@@ -43,19 +44,31 @@ const blockedJob = (hasFields: boolean) => ({
 })
 const has = (view: { tree(): unknown }, text: string) => JSON.stringify(view.tree()).includes(text)
 const fail = (error: BkError): Result<never> => ({ ok: false, error })
+// The worker's real answer: its message names the pipeline by slug only.
 const forbidden: BkError = {
   kind: 'forbidden',
-  message: "You don't have permission to do this on acme/web",
-  pipeline: 'web'
+  message: "You don't have permission to do this on web",
+  pipeline: 'web',
+  status: 403
 }
+const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms))
 
-function setup(list: () => Build[], extra: Record<string, (input: any) => unknown> = {}, write = true) {
+function setup(
+  list: (n: number) => Build[] | Promise<Build[]>,
+  extra: Record<string, (input: any) => unknown> = {},
+  write = true,
+  results: Record<string, unknown> = {}
+) {
   const lists: number[] = []
   const host = mockHost({
+    results,
     requests: {
       'auth.status': () => auth(write),
       'project.get': () => ({ ok: true, value: project }),
-      'builds.list': () => (lists.push(1), { ok: true, value: { builds: list(), fetchedAt: '2026-11-13T10:05:00Z' } }),
+      'builds.list': async () => {
+        lists.push(1)
+        return { ok: true, value: { builds: await list(lists.length), fetchedAt: '2026-11-13T10:05:00Z' } }
+      },
       ...extra
     } as never
   })
@@ -114,7 +127,9 @@ test('forbidden shows the inline row error and nothing is retried (AC21)', async
   const view = await mount(panel, { host: s.host })
   await view.press({ text: 'Rebuild' })
   assert.equal(calls.length, 1)
+  // Built from the build's org/pipeline: the worker's text only has the slug, which can repeat across orgs.
   assert.equal(JSON.stringify(view.tree()).split("You don't have permission to do this on acme/web").length, 2)
+  assert.ok(!has(view, 'on web'))
   assert.equal(s.lists.length, 1, 'no refresh after a failure')
   assert.ok(!has(view, 'Retry'))
   await view.unmount()
@@ -175,5 +190,195 @@ test('a blocked step without fields: Unblock asks first, then unblocks and refre
   await view.press({ text: 'Unblock' })
   assert.deepEqual(calls, [{ org: 'acme', pipeline: 'web', number: 4, jobId: 'job-1' }])
   assert.equal(s.lists.length, 2)
+  await view.unmount()
+})
+
+test('a second press before the first call returns runs it once (AC19)', async () => {
+  let release: (r: unknown) => void = () => {}
+  const gate = new Promise((r) => (release = r))
+  const calls: unknown[] = []
+  const s = setup(() => [running(5)], { 'builds.cancel': (i) => (calls.push(i), gate) })
+  const view = await mount(panel, { host: s.host })
+  await view.press({ text: 'Cancel' })
+  const first = view.press({ text: 'Cancel build' })
+  const second = view.press({ text: 'Cancel build' })
+  await tick()
+  release({ ok: true, value: {} })
+  await Promise.all([first, second])
+  assert.equal(calls.length, 1)
+  await view.unmount()
+})
+
+test('the refresh after an action waits for a poll already in flight (AC19)', async () => {
+  mock.timers.enable({ apis: ['setInterval'] })
+  try {
+    let cancelled = false
+    let releasePoll: () => void = () => {}
+    const poll = new Promise<void>((r) => (releasePoll = r))
+    const s = setup(
+      async (n) => {
+        if (n === 2) await poll
+        return [cancelled ? build(5, { state: 'canceling', finishedAt: null }) : running(5)]
+      },
+      { 'builds.cancel': () => ((cancelled = true), { ok: true, value: {} }) }
+    )
+    const view = await mount(panel, { host: s.host })
+    mock.timers.tick(15_000)
+    await tick()
+    assert.equal(s.lists.length, 2, 'the poll is in flight')
+    const opening = view.press({ text: 'Cancel' })
+    await tick()
+    const cancelling = view.press({ text: 'Cancel build' })
+    await tick()
+    releasePoll()
+    await Promise.all([opening, cancelling])
+    assert.equal(s.lists.length, 3, 'a request made after the cancel went through')
+    assert.ok(has(view, 'canceling'))
+    assert.ok(!view.find({ text: 'Cancel' }), 'no Cancel button on a canceling build')
+    await view.unmount()
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('a row stays busy through a poll and other rows are unaffected (AC19)', async () => {
+  mock.timers.enable({ apis: ['setInterval'] })
+  try {
+    let release: (r: unknown) => void = () => {}
+    const gate = new Promise((r) => (release = r))
+    const s = setup(() => [build(7), build(6)], { 'builds.rebuild': () => gate })
+    const view = await mount(panel, { host: s.host })
+    const rebuilding = view.press({ text: 'Rebuild' })
+    await tick()
+    mock.timers.tick(15_000)
+    await tick()
+    assert.equal(s.lists.length, 2)
+    assert.equal(view.find({ text: 'Rebuilding…' })?.disabled, true)
+    assert.equal(view.find({ text: 'Rebuild' })?.disabled, false, 'the other row can still be rebuilt')
+    release({ ok: true, value: { number: 8 } })
+    await rebuilding
+    await view.unmount()
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('actions are disabled while the list is stale, confirmations included (AC24)', async () => {
+  let calls = 0
+  const s = setup(() => {
+    if (++calls > 1) throw hostError('unavailable')
+    return [build(7), running(6)]
+  })
+  const view = await mount(panel, { host: s.host })
+  assert.equal(view.find({ text: 'Rebuild' })?.disabled, false)
+  await view.press({ text: 'Cancel' })
+  assert.equal(view.find({ text: 'Cancel build' })?.disabled, false)
+  await view.press({ label: 'Refresh' })
+  assert.ok(has(view, 'Stale'))
+  assert.equal(view.find({ text: 'Rebuild' })?.disabled, true)
+  assert.equal(view.find({ text: 'Cancel build' })?.disabled, true)
+  await view.unmount()
+})
+
+test('a refresh that changes a row drops its confirmation, note and error (AC19, AC21)', async () => {
+  let state = 'running'
+  const s = setup(() => [build(5, { state, finishedAt: null })], {
+    'builds.cancel': () => fail({ kind: 'buildkite_error', message: 'Buildkite returned an error (500)' })
+  })
+  const view = await mount(panel, { host: s.host })
+  await view.press({ text: 'Cancel' })
+  await view.press({ text: 'Cancel build' })
+  assert.ok(has(view, 'Buildkite returned an error (500)'))
+  await view.press({ text: 'Cancel' })
+  assert.ok(has(view, 'Cancel build #5 on acme/web?'))
+  state = 'canceling'
+  await view.press({ label: 'Refresh' })
+  assert.ok(!has(view, 'Cancel build #5 on acme/web?'))
+  assert.ok(!has(view, 'Buildkite returned an error (500)'))
+  assert.ok(!view.find({ text: 'Cancel' }))
+  await view.unmount()
+})
+
+test('the rebuild note ends once the new build is listed (AC19)', async () => {
+  const s = setup((n) => (n >= 3 ? [build(8), build(7)] : [build(7)]), {
+    'builds.rebuild': () => ({ ok: true, value: { number: 8 } })
+  })
+  const view = await mount(panel, { host: s.host })
+  await view.press({ text: 'Rebuild' })
+  assert.ok(has(view, 'Rebuild started as #8'))
+  await view.press({ label: 'Refresh' })
+  assert.ok(has(view, 'Commit 8'))
+  assert.ok(!has(view, 'Rebuild started as #8'))
+  await view.unmount()
+})
+
+test('no note when the new build is already in the refreshed list (AC19)', async () => {
+  const s = setup((n) => (n >= 2 ? [build(8), build(7)] : [build(7)]), {
+    'builds.rebuild': () => ({ ok: true, value: { number: 8 } })
+  })
+  const view = await mount(panel, { host: s.host })
+  await view.press({ text: 'Rebuild' })
+  assert.ok(has(view, 'Commit 8'))
+  assert.ok(!has(view, 'Rebuild started'))
+  await view.unmount()
+})
+
+test('Cancel failures show inline and are not retried (AC21)', async () => {
+  const calls: unknown[] = []
+  const s = setup(() => [running(5)], { 'builds.cancel': (i) => (calls.push(i), fail(forbidden)) })
+  const view = await mount(panel, { host: s.host })
+  await view.press({ text: 'Cancel' })
+  await view.press({ text: 'Cancel build' })
+  assert.equal(calls.length, 1)
+  assert.ok(has(view, "You don't have permission to do this on acme/web"))
+  assert.ok(!has(view, 'Cancel build #5 on acme/web?'))
+  assert.equal(s.lists.length, 1)
+  await view.unmount()
+})
+
+test('Unblock failures show inline and are not retried (AC21)', async () => {
+  const calls: unknown[] = []
+  const s = setup(() => [build(4, { state: 'blocked', finishedAt: null, jobs: [blockedJob(false)] })], {
+    'jobs.unblock': (i) => (calls.push(i), fail(forbidden))
+  })
+  const view = await mount(panel, { host: s.host })
+  await view.toggle({ text: /Jobs · 1/ })
+  await view.press({ text: 'Unblock' })
+  await view.press({ text: 'Unblock' })
+  assert.equal(calls.length, 1)
+  assert.ok(has(view, "You don't have permission to do this on acme/web"))
+  assert.equal(s.lists.length, 1)
+  await view.unmount()
+})
+
+test('a build URL that is not https on buildkite.com is never opened (AC22)', async () => {
+  const bad = ['', 'not a url', 'http://buildkite.com/acme/web/builds/1', 'https://evil.example/acme/web', 'https://buildkite.com.evil.example/x']
+  for (const webUrl of bad) {
+    const s = setup(() => [build(4, { webUrl, state: 'blocked', finishedAt: null, jobs: [blockedJob(true)] })])
+    const view = await mount(panel, { host: s.host })
+    await view.toggle({ text: /Jobs · 1/ })
+    assert.equal(view.find({ label: 'Open build #4 in Buildkite' })?.disabled, true, webUrl)
+    assert.equal(view.find({ text: 'Unblock in Buildkite' })?.disabled, true, webUrl)
+    assert.deepEqual(s.host.callsOf('shell.openExternal'), [], webUrl)
+    await view.unmount()
+  }
+})
+
+test('Orca refusing to open the browser is handled quietly (AC22)', async () => {
+  const s = setup(
+    () => [build(4, { state: 'blocked', finishedAt: null, jobs: [blockedJob(true)] })],
+    {},
+    true,
+    {
+      'shell.openExternal': () => {
+        throw hostError('not_permitted', 'declined')
+      }
+    }
+  )
+  const view = await mount(panel, { host: s.host })
+  await view.toggle({ text: /Jobs · 1/ })
+  await view.press({ text: 'Unblock in Buildkite' })
+  await view.press({ label: 'Open build #4 in Buildkite' })
+  assert.deepEqual(view.errors, [])
   await view.unmount()
 })
