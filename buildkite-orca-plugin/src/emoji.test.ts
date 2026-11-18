@@ -36,12 +36,36 @@ test('names without shortcodes are unchanged', () => {
   assert.equal(jobLabel('Step: build').text, 'Step: build')
 })
 
-test('digit-only colon runs such as times are not treated as shortcodes', () => {
-  assert.equal(jobLabel('Nightly 12:30:45').text, 'Nightly 12:30:45')
+test('colon-separated text is not a shortcode: times and command names stay as written', () => {
+  for (const name of ['Nightly 12:30:45', 'yarn test:unit:ci', 'rake db:schema:load', 'bundle exec rake db:migrate:reset', 'deploy:staging:eu']) {
+    assert.deepEqual(jobLabel(name), { icons: [], text: name }, name)
+  }
+  const lint = jobLabel('npm run lint:js:fix')
+  assert.deepEqual(lint, { icons: [], text: 'npm run lint:js:fix' })
 })
 
-test('every Buildkite shortcode points at a bundled image', () => {
+test('a shortcode next to punctuation or another shortcode still matches', () => {
+  assert.deepEqual(jobLabel(':rocket:, go (:docker:)'), {
+    icons: [{ name: 'docker', src: 'assets/emoji/docker.png' }],
+    text: '🚀, go ()'
+  })
+  assert.deepEqual(jobLabel(':docker::pipeline:').icons.map((i) => i.name), ['docker', 'pipeline'])
+})
+
+test('a shortcode with a dot matches (:quay.io:)', () => {
+  assert.deepEqual(jobLabel(':quay.io: Push'), {
+    icons: [{ name: 'quay.io', src: 'assets/emoji/quay.png' }],
+    text: 'Push'
+  })
+})
+
+test('shortcodes whose image Orca cannot show are removed, never printed', () => {
+  assert.deepEqual(jobLabel(':partyparrot: Party :buildkite-party:'), { icons: [], text: 'Party' })
+})
+
+test('every Buildkite shortcode points at a bundled image in a format Orca accepts', () => {
   const dir = fileURLToPath(new URL('../assets/emoji/', import.meta.url))
-  const missing = Object.values(BUILDKITE_EMOJI).filter((file) => !existsSync(dir + file))
-  assert.deepEqual(missing, [])
+  const files = Object.values(BUILDKITE_EMOJI)
+  assert.deepEqual(files.filter((file) => !existsSync(dir + file)), [])
+  assert.deepEqual(files.filter((file) => !/\.(?:png|jpe?g|webp)$/i.test(file)), [])
 })

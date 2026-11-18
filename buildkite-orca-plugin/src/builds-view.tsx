@@ -3,6 +3,7 @@
 import {
   atom,
   Badge,
+  Box,
   Button,
   Callout,
   Card,
@@ -411,13 +412,13 @@ function JobRow({ job, b }: { job: Job; b: Build }) {
   return (
     <Stack gap="xs">
       <Row justify="between" gap="xs" wrap>
-        <Row gap="xs">
+        <Box direction="row" gap="xs" align="center" grow minWidth={0}>
           {icons.map((icon, i) => (
             <Image key={i} src={icon.src} alt={icon.name} size="xs" />
           ))}
           {text !== '' ? <Text truncate>{text}</Text> : null}
-        </Row>
-        <Row gap="xs">
+        </Box>
+        <Box direction="row" gap="xs" align="center" shrink={false}>
           <Badge tone={tone(job.state)}>{job.state}</Badge>
           {unblockable && job.hasFields ? (
             <Button
@@ -436,7 +437,7 @@ function JobRow({ job, b }: { job: Job; b: Build }) {
             </Button>
           ) : null}
           {st.running === id ? <Spinner label="Working" labelHidden /> : null}
-        </Row>
+        </Box>
       </Row>
       {unblockable && st.confirm === id ? (
         <Confirm
