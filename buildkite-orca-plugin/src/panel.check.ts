@@ -20,6 +20,8 @@ const pipeline = (org: string, slug: string): Pipeline => ({
 const all = [pipeline('acme', 'web'), pipeline('acme', 'api'), pipeline('ops', 'infra')]
 const workspace = { id: 'ws-1', path: '/repos/web', remote: 'git@github.com:acme/web.git', branch: 'main' }
 
+const readOnlyState: AuthState = { state: 'signedIn', user: { name: 'Ana Souza' }, canWriteBuilds: false }
+
 const withProject = (value: Project) => ({
   requests: {
     'auth.status': () => signedInState,
@@ -77,6 +79,28 @@ export default defineCheck({
   loadingBuilds: withProject({ workspace, source: 'auto', pipelines: [all[0]] }),
   buildsFromSeveralPipelines: {
     ...listing(() => okBuilds(sample), { workspace, source: 'auto', pipelines: all.slice(0, 2) }),
+    storage: { 'panel.prefs': { 'ws-1': { expanded: ['acme/web#4827'] } } }
+  },
+  // Write scope: Rebuild on finished builds, Cancel on the running one, and the expanded blocked
+  // step shows "Unblock in Buildkite" (every block step has input fields, so no in-panel Unblock).
+  actionsWithWriteScope: {
+    ...listing(() => okBuilds([build(4827, { state: 'running', finishedAt: null }), build(4825)]), {
+      workspace,
+      source: 'auto',
+      pipelines: [all[0]]
+    }),
+    storage: { 'panel.prefs': { 'ws-1': { expanded: ['acme/web#4827'] } } }
+  },
+  // Read-only token: no action buttons, a "Read-only" badge, the open link stays.
+  actionsReadOnlyToken: {
+    requests: {
+      ...listing(() => okBuilds([build(4827, { state: 'running', finishedAt: null }), build(4825)]), {
+        workspace,
+        source: 'auto',
+        pipelines: [all[0]]
+      }).requests,
+      'auth.status': () => readOnlyState
+    },
     storage: { 'panel.prefs': { 'ws-1': { expanded: ['acme/web#4827'] } } }
   },
   noBuilds: listing(() => okBuilds([]), { workspace, source: 'auto', pipelines: [all[0]] }),

@@ -21,7 +21,7 @@ import {
   type PanelContext
 } from 'orca'
 import type { AuthState, BkError } from './protocol'
-import { RefreshControls, StaleBadge, startBuilds, UpdatedAt } from './builds-view'
+import { canWriteBuilds, ReadOnlyBadge, RefreshControls, StaleBadge, startBuilds, UpdatedAt } from './builds-view'
 import { applyProject, loadProject, ProjectArea, resetProject } from './project-view'
 
 // None of these is persisted. The token only ever lives in the field's draft until submit.
@@ -34,6 +34,7 @@ const replacing = atom(false)
 
 function applyAuth(next: AuthState): void {
   set(auth, next)
+  set(canWriteBuilds, next.state === 'signedIn' && next.canWriteBuilds)
   set(formError, null)
   set(menuOpen, false)
   if (next.state === 'signedOut') {
@@ -185,6 +186,7 @@ function SignedIn({ name }: { name: string }) {
         <Row gap="xs">
           <Heading level={2}>Buildkite</Heading>
           <StaleBadge />
+          <ReadOnlyBadge />
         </Row>
         <Row gap="xs">
           <RefreshControls />
