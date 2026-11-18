@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { assert, test } from 'orca/testing'
 import { jobLabel } from './emoji'
@@ -68,4 +68,17 @@ test('every Buildkite shortcode points at a bundled image in a format Orca accep
   const files = Object.values(BUILDKITE_EMOJI)
   assert.deepEqual(files.filter((file) => !existsSync(dir + file)), [])
   assert.deepEqual(files.filter((file) => !/\.(?:png|jpe?g|webp)$/i.test(file)), [])
+})
+
+test('every bundled image is a transparent PNG on a 3:1 canvas, so Orca shows each icon at the same size', () => {
+  const dir = fileURLToPath(new URL('../assets/emoji/', import.meta.url))
+  const odd: string[] = []
+  for (const file of new Set(Object.values(BUILDKITE_EMOJI))) {
+    const bytes = readFileSync(dir + file)
+    const head = new DataView(bytes.buffer, bytes.byteOffset, 26)
+    const png = head.getUint32(0) === 0x89504e47 && head.getUint32(4) === 0x0d0a1a0a
+    const rgba = head.getUint8(25) === 6
+    if (!png || !rgba || head.getUint32(16) !== 3 * head.getUint32(20)) odd.push(file)
+  }
+  assert.deepEqual(odd, [])
 })

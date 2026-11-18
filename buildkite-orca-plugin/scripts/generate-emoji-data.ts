@@ -1,7 +1,9 @@
 // Regenerates src/emoji-data.ts from a checkout of https://github.com/buildkite/emojis.
 // Usage: bun scripts/generate-emoji-data.ts <emojis checkout> [--sync-assets]
-// --sync-assets also replaces assets/emoji/ with the images the table uses.
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+// --sync-assets also replaces assets/emoji/ with the images the table uses, each re-encoded as a PNG
+// on a transparent 3:1 canvas (needs ImageMagick: `magick`, or `convert` for ImageMagick 6).
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 type Entry = { name: string; image: string; aliases: string[]; unicode?: string }
@@ -47,8 +49,32 @@ ${table('UNICODE_EMOJI', unicode)}`
 )
 
 if (flag === '--sync-assets') {
+  // Orca's Image renders `size="xs"` 48px wide whatever the picture's shape, so every image gets the
+  // same 3:1 canvas: the logo is scaled to the canvas height (kept whole, so a wide one comes out
+  // smaller), centered, and Orca draws it about 16px tall.
+  const magick = ['magick', 'convert'].find((tool) => {
+    try {
+      execFileSync(tool, ['-version'], { stdio: 'ignore' })
+      return true
+    } catch {
+      return false
+    }
+  })
+  if (!magick) throw new Error('--sync-assets needs ImageMagick (`brew install imagemagick`)')
   const dest = join(pluginDir, 'assets/emoji')
   rmSync(dest, { recursive: true, force: true })
   mkdirSync(dest, { recursive: true })
-  for (const file of files) cpSync(join(source, 'img-buildkite-64', file), join(dest, file))
+  for (const file of files) {
+    execFileSync(magick, [
+      '-quiet',
+      join(source, 'img-buildkite-64', file),
+      '-background', 'none',
+      '-resize', '192x64',
+      '-gravity', 'center',
+      '-extent', '192x64',
+      '-strip',
+      '-define', 'png:compression-level=9',
+      `PNG32:${join(dest, file)}`
+    ])
+  }
 }
