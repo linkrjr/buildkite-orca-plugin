@@ -1,5 +1,5 @@
 import { mock } from 'node:test'
-import { assert, mockHost, mount, test } from 'orca/testing'
+import { assert, mockHost, mount, test, type TreeSnapshot } from 'orca/testing'
 import type { AuthState, Build, BkError, Pipeline, Project, Result } from './protocol'
 import * as panel from './panel'
 
@@ -147,6 +147,28 @@ test('a long job name truncates inside a shrinkable box, and the state badge kee
   const badge = JSON.stringify(view.tree()).match(/"shrink":false[^]*?"passed"/)
   assert.ok(badge, 'the badge sits in a box that keeps its size')
   assert.ok(JSON.stringify(view.tree()).includes('"minWidth":0'), 'the name box can shrink below its content')
+  await view.unmount()
+})
+
+test('each job icon sits in a box that keeps its size, so a long name cannot squeeze it (job icon size)', async () => {
+  const name = ':docker::pipeline: ' + 'bundle exec rake db:migrate:reset '.repeat(8)
+  const jobs = [{ id: 'j1', type: 'script' as const, name, state: 'passed', unblockable: false, hasFields: false }]
+  const s = setup(() => proj(), () => ok([build(1, { jobs })]))
+  const view = await mount(panel, { host: s.host })
+  await view.toggle({ text: /Jobs · 1/ })
+  const wrappers: { src: unknown; shrink: unknown }[] = []
+  const walk = (node: TreeSnapshot | string | null) => {
+    if (node === null || typeof node === 'string') return
+    for (const child of node.children ?? []) {
+      if (typeof child !== 'string' && child.type === 'Image') wrappers.push({ src: child.props?.src, shrink: node.props?.shrink })
+      walk(child)
+    }
+  }
+  walk(view.tree())
+  assert.deepEqual(wrappers, [
+    { src: 'assets/emoji/docker.png', shrink: false },
+    { src: 'assets/emoji/pipeline.png', shrink: false }
+  ])
   await view.unmount()
 })
 

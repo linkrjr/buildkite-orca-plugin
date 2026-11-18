@@ -414,7 +414,9 @@ function JobRow({ job, b }: { job: Job; b: Build }) {
       <Row justify="between" gap="xs" wrap>
         <Box direction="row" gap="xs" align="center" grow minWidth={0}>
           {icons.map((icon, i) => (
-            <Image key={i} src={icon.src} alt={icon.name} size="xs" />
+            <Box key={i} shrink={false}>
+              <Image src={icon.src} alt={icon.name} size="xs" />
+            </Box>
           ))}
           {text !== '' ? <Text truncate>{text}</Text> : null}
         </Box>
