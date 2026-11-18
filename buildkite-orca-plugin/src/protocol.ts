@@ -23,7 +23,7 @@ export type AuthState =
   | { state: 'signedIn'; user: { name: string; email?: string }; canWriteBuilds: boolean }
 
 export type BuildTarget = { org: string; pipeline: string; number: number }
-// -- T2: project and pipelines
+// -- project and pipelines
 export type PipelineRef = { org: string; slug: string }
 export type Pipeline = PipelineRef & { orgName: string; name: string; repository: string; webUrl: string }
 export type Workspace = { id: string; path: string; remote: string | null; branch: string | null }

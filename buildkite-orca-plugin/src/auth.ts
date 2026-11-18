@@ -69,7 +69,7 @@ export function createAuth(orca: OrcaWorkerApi) {
   }
 
   /** Authenticated Buildkite call with the stored token. A 401 means the token was revoked:
-   *  delete it and tell the panel (AC25). */
+   *  delete it and tell the panel. */
   async function request(
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     path: string,

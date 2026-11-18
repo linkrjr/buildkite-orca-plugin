@@ -1,5 +1,5 @@
 // The signed-in body's project part: which pipelines the panel follows for the active workspace,
-// the picker, and the pipeline filter. T7 reads `selectedPipelines` for its builds list.
+// the picker, and the pipeline filter. builds-view.tsx reads `selectedPipelines` for its builds list.
 import {
   atom,
   Box,
